@@ -3,8 +3,10 @@ const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// 中職球隊名稱標準表
-const TEAMS = ["中信兄弟", "統一7-ELEVEn獅", "統一獅", "味全龍", "富邦悍將", "樂天桃猿", "台鋼雄鷹"];
+const CPBL_TEAMS = [
+  "中信兄弟", "統一7-ELEVEn獅", "統一獅", "味全龍",
+  "富邦悍將", "樂天桃猿", "台鋼雄鷹"
+];
 
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
@@ -13,7 +15,7 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在從 CPBL 官方首頁 (https://www.cpbl.com.tw/) 解析即時比分與賽程...");
+    console.log("🔍 正在從 CPBL 首頁頂部看板抓取最新賽程與即時比分...");
 
     const response = await axios.get('https://www.cpbl.com.tw/', {
       headers: {
@@ -25,69 +27,82 @@ async function main() {
     });
 
     const $ = cheerio.load(response.data);
+
+    // 1. 先把公告、跑馬燈、新聞、頁尾等非看板內容直接從 DOM 移除
+    $('marquee, footer, .marquee, .news, .notice, .bulletin, .rank, .standing, .sidebar').remove();
+
     const matches = [];
 
-    // 1. 優先搜尋首頁頂部比分看版常用的 class 容器
-    const scoreSelectors = [
-      '.game_box',
-      '.header_game',
-      '.top_scoreboard',
-      '.game_item',
-      '.Scoreboard',
-      '.match_box'
-    ];
+    // 2. 針對頁面頂部的賽事看板卡片節點進行掃描
+    // CPBL 頂部賽事看板通常位於 header 或是 swiper-slide / game_item 結構中
+    $('header, .header, .top_scoreboard, .swiper-wrapper, body').find('div, li, a').each((_, el) => {
+      // 限制節點層級，避免重複抓到外層大容器
+      if ($(el).children().length > 10) return;
 
-    let foundScoreboard = false;
+      const rawText = $(el).text().replace(/\s+/g, ' ').trim();
 
-    // 嘗試針對特定比分看版容器抓取
-    scoreSelectors.forEach(selector => {
-      $(selector).each((_, el) => {
-        const text = $(el).text().replace(/\s+/g, ' ').trim();
-        const found = TEAMS.filter(t => text.includes(t));
+      // 嚴格排除補賽公告與歷史新聞常見字
+      if (
+        rawText.includes("例行賽編號") ||
+        rawText.includes("原場地進行補賽") ||
+        rawText.includes("延賽至") ||
+        rawText.includes("棒球場進行補賽") ||
+        rawText.includes("先發") ||
+        rawText.includes("盜壘")
+      ) {
+        return;
+      }
 
-        if (found.length === 2) {
-          foundScoreboard = true;
-          parseAndPushMatch($, el, found, matches);
+      // 比對是否有對決的 2 支球隊
+      const foundTeams = CPBL_TEAMS.filter(team => rawText.includes(team));
+
+      if (foundTeams.length === 2 && rawText.length >= 6 && rawText.length <= 90) {
+        const key = `${foundTeams[0]}-${foundTeams[1]}`;
+        const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
+
+        if (!matches.some(m => m.key === key || m.key === reverseKey)) {
+          // 狀態判定
+          let statusEmoji = "🟢";
+          let statusText = "進行中 / 賽前";
+
+          if (rawText.includes("結束") || rawText.includes("終場") || rawText.includes("Final")) {
+            statusEmoji = "🔴";
+            statusText = "比賽結束";
+          } else if (rawText.includes("延賽") || rawText.includes("取消") || rawText.includes("因雨")) {
+            statusEmoji = "🌧️";
+            statusText = "因雨延賽";
+          }
+
+          // 嘗試抓取分數或局數等簡要資訊
+          // 如果卡片內有數字，過濾乾淨顯示
+          matches.push({
+            key,
+            awayTeam: foundTeams[0],
+            homeTeam: foundTeams[1],
+            info: rawText,
+            status: `${statusEmoji} ${statusText}`
+          });
         }
-      });
+      }
     });
 
-    // 2. 若官網改版 class 變更，則以廣域結構化過濾（自動排除新聞與球員榜）
-    if (!foundScoreboard || matches.length === 0) {
-      $('div, li, a').each((_, el) => {
-        // 排除父層容器，鎖定葉子卡片
-        if ($(el).find('div, li, a').length > 6) return;
-
-        const text = $(el).text().replace(/\s+/g, ' ').trim();
-
-        // 嚴格過濾條件：必須排除新聞常見字眼（橫掃、再勝、先發、盜壘、安打王、原場地進行補賽等）
-        const isNewsOrStats = /(新聞|先發|勝投|盜壘|打擊率|補賽周|補賽週|宣布|報導|火力串聯|客場橫掃)/.test(text);
-        if (isNewsOrStats) return;
-
-        const found = TEAMS.filter(t => text.includes(t));
-        // 剛好抓到兩隊，且字數短小精幹（卡片區塊）
-        if (found.length === 2 && text.length >= 6 && text.length <= 80) {
-          parseAndPushMatch($, el, found, matches);
-        }
-      });
-    }
-
     let messageContent = "";
+
     if (matches.length > 0) {
       messageContent = matches.map(m => {
-        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📊 **比分/賽況**：${m.detail}\n📌 **狀態**：${m.status}`;
+        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📊 **賽況資訊**：${m.info}\n📌 **狀態**：${m.status}`;
       }).join('\n\n───────────────\n\n');
     } else {
-      messageContent = "ℹ️ 首頁目前無進行中或今日排定之賽事（可能非比賽日或尚未開賽）。";
+      messageContent = "ℹ️ 首頁頂部目前無進行中賽事或排定賽程（可能今日無賽事）。";
     }
 
     const payload = {
-      content: `📢 **中華職棒 官方首頁最新賽事戰況**\n\n${messageContent}`
+      content: `📢 **中華職棒 官方今日即時賽況 / 比分看板**\n\n${messageContent}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播首頁比分戰況到 Discord！");
+    console.log("✅ 成功推播頂部看板賽事到 Discord！");
 
   } catch (error) {
     if (error.response) {
@@ -97,30 +112,6 @@ async function main() {
       console.error("❌ 執行過程發生錯誤:", error.message);
     }
     process.exit(1);
-  }
-}
-
-// 輔助函式：解析並去重塞入結果陣列
-function parseAndPushMatch($, el, foundTeams, matchesList) {
-  const text = $(el).text().replace(/\s+/g, ' ').trim();
-  const key = `${foundTeams[0]}-${foundTeams[1]}`;
-  const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
-
-  if (!matchesList.some(m => m.key === key || m.key === reverseKey)) {
-    let status = "🟢 賽前 / 進行中";
-    if (text.includes("結束") || text.includes("終場") || text.includes("Final")) {
-      status = "🔴 比賽結束";
-    } else if (text.includes("延賽") || text.includes("因雨") || text.includes("取消")) {
-      status = "🌧️ 因雨延賽";
-    }
-
-    matchesList.push({
-      key,
-      awayTeam: foundTeams[0],
-      homeTeam: foundTeams[1],
-      detail: text,
-      status
-    });
   }
 }
 
