@@ -1,12 +1,18 @@
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-const CPBL_TEAMS = [
-  "中信兄弟", "統一7-ELEVEn獅", "統一獅", "味全龍",
-  "富邦悍將", "樂天桃猿", "台鋼雄鷹"
-];
+// 取得台灣時間 (UTC+8) 的 YYYY/MM/DD
+function getTaiwanDateString() {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const twTime = new Date(utc + (3600000 * 8));
+  
+  const yyyy = twTime.getFullYear();
+  const mm = String(twTime.getMonth() + 1).padStart(2, '0');
+  const dd = String(twTime.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
@@ -15,71 +21,68 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在從 CPBL 首頁取得最新比分與戰況...");
+    const todayStr = getTaiwanDateString();
+    console.log(`🔍 正在查詢台灣時間 [${todayStr}] 中職當日賽程與即時比分...`);
 
-    // 抓取 CPBL 首頁（保證 200 回傳，包含即時賽況板塊）
-    const response = await axios.get('https://www.cpbl.com.tw/', {
+    // CPBL 官網賽事資料接口
+    const response = await axios.get(`https://www.cpbl.com.tw/home/getgames?date=${todayStr}`, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8'
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': 'https://www.cpbl.com.tw/'
       },
-      timeout: 15000,
-      maxRedirects: 5
+      timeout: 15000
     });
 
-    const $ = cheerio.load(response.data);
-    const matches = [];
+    const games = Array.isArray(response.data) ? response.data : (response.data?.Games || response.data?.games || []);
+    let matchLines = [];
 
-    // 解析頁面內所有可能包含比賽卡片的容器
-    $('div, li, tr, a').each((_, el) => {
-      // 避免太深或太龐大的外層容器
-      if ($(el).children().length > 12) return;
+    if (games && games.length > 0) {
+      games.forEach(game => {
+        // 解析客隊、主隊名稱
+        const awayTeam = game.AwayTeamName || game.VisitingTeamName || game.VisitingClubName || game.GuestTeamName || "客隊";
+        const homeTeam = game.HomeTeamName || game.HomeClubName || "主隊";
 
-      const rawText = $(el).text().replace(/\s+/g, ' ').trim();
-      const foundTeams = CPBL_TEAMS.filter(team => rawText.includes(team));
+        // 分數
+        const awayScore = game.VisitingScore ?? game.AwayScore ?? "-";
+        const homeScore = game.HomeScore ?? "-";
 
-      // 剛好抓到對戰的兩隊
-      if (foundTeams.length === 2 && rawText.length >= 10 && rawText.length <= 150) {
-        const key = `${foundTeams[0]}-${foundTeams[1]}`;
-        const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
+        // 球場與狀態
+        const field = game.Field || game.FieldName || "";
+        const gameNo = game.GameNo || game.GameSno ? `(G${game.GameNo || game.GameSno})` : "";
+        let statusText = game.GameStatusText || game.Status || "賽前 / 未開打";
 
-        if (!matches.some(m => m.key === key || m.key === reverseKey)) {
-          let statusBadge = "🟢 進行中 / 賽前";
-          if (rawText.includes("結束") || rawText.includes("終場") || rawText.includes("Final")) {
-            statusBadge = "🔴 比賽結束";
-          } else if (rawText.includes("延賽") || rawText.includes("取消") || rawText.includes("因雨")) {
-            statusBadge = "🌧️ 延賽 / 取消";
-          }
-
-          matches.push({
-            key,
-            teamAway: foundTeams[0],
-            teamHome: foundTeams[1],
-            detail: rawText,
-            status: statusBadge
-          });
+        let statusEmoji = "🟢";
+        if (statusText.includes("結束") || statusText.includes("終場") || statusText.includes("FINAL")) {
+          statusEmoji = "🔴";
+          statusText = "比賽結束";
+        } else if (statusText.includes("延") || statusText.includes("取消") || statusText.includes("因雨")) {
+          statusEmoji = "🌧️";
         }
-      }
-    });
 
-    let messageContent = "";
+        matchLines.push(
+          `⚾ **${awayTeam}**  **${awayScore}** : **${homeScore}**  **${homeTeam}** ${gameNo}\n` +
+          `🏟️ **球場**：${field || "未定"}\n` +
+          `📌 **狀態**：${statusEmoji} ${statusText}`
+        );
+      });
+    }
 
-    if (matches.length > 0) {
-      messageContent = matches.map(m => {
-        return `⚾ **${m.teamAway}** vs **${m.teamHome}**\n📊 **賽況**：${m.detail}\n📌 **狀態**：${m.status}`;
-      }).join('\n\n───────────────\n\n');
+    let finalMessage = "";
+    if (matchLines.length > 0) {
+      finalMessage = matchLines.join('\n\n───────────────\n\n');
     } else {
-      messageContent = "ℹ️ 今日無排定之中華職棒賽事，或賽事尚未開始。";
+      finalMessage = `ℹ️ 今日 (${todayStr}) 中華職棒無排定賽事，或今日賽程尚未開始。`;
     }
 
     const payload = {
-      content: `📢 **中華職棒 最新賽事戰況 / 即時比分**\n\n${messageContent.slice(0, 1800)}`
+      content: `📢 **中華職棒 今日賽事與即時比分 (${todayStr})**\n\n${finalMessage}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播當日賽事戰況到 Discord！");
+    console.log("✅ 成功推播精準賽事到 Discord！");
 
   } catch (error) {
     if (error.response) {
