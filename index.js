@@ -30,33 +30,22 @@ async function main() {
       const status = $(element).find('.status, .inning').text().trim();
 
       if (awayTeam && homeTeam) {
-        matchContent += `### ⚾ ${awayTeam} vs ${homeTeam}\n* **比分**：${score || '未開打'}\n* **狀態**：${status || '進行中'}\n\n`;
+        matchContent += `⚾ **${awayTeam}** vs **${homeTeam}**\n比分：${score || '未開打'}\n狀態：${status || '進行中'}\n\n`;
       }
     });
 
-    // 如果沒有抓到比賽資訊，給予預設說明文字
     if (!matchContent.trim()) {
-      matchContent = "ℹ️ 今日目前無正在進行中的賽事或非比賽時段。";
+      matchContent = "⚾ **今日賽事快訊**\n今日目前無進行中賽事或非比賽時段。";
     }
 
-    // 組裝合規且美觀的 Discord Embed Payload
+    // 最乾淨、最相容的 Discord Payload 結構
     const payload = {
-      username: "CPBL 戰況快報",
-      avatar_url: "https://www.cpbl.com.tw/images/logo.png",
-      embeds: [
-        {
-          title: "📢 中華職棒 即時戰況",
-          description: matchContent,
-          color: 0x1877f2, // 職棒藍
-          footer: {
-            text: "資料來源：中華職棒官網"
-          },
-          timestamp: new Date().toISOString()
-        }
-      ]
+      content: `📢 **中華職棒 戰況快報**\n\n${matchContent}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
+    console.log("📦 發送內容預覽：", JSON.stringify(payload, null, 2));
+
     await axios.post(DISCORD_WEBHOOK_URL, payload);
     console.log("✅ 成功推播最新戰況到 Discord！");
 
