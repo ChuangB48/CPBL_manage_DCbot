@@ -3,10 +3,7 @@ const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-const CPBL_TEAMS = [
-  "中信兄弟", "統一獅", "統一7-ELEVEn獅", "味全龍", 
-  "富邦悍將", "樂天桃猿", "台鋼雄鷹"
-];
+const CPBL_TEAMS = ["中信兄弟", "統一獅", "統一7-ELEVEn獅", "味全龍", "富邦悍將", "樂天桃猿", "台鋼雄鷹"];
 
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
@@ -15,13 +12,12 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在從 Yahoo 中職賽程頁面解析比分與戰況...");
+    console.log("🔍 正在抓取今日中職賽況與比分...");
 
-    const response = await axios.get('https://tw.sports.yahoo.com/cpbl/schedule/', {
+    const response = await axios.get('https://today.line.me/tw/v2/page/sports-baseball', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8'
       },
       timeout: 15000
     });
@@ -29,32 +25,31 @@ async function main() {
     const $ = cheerio.load(response.data);
     const matches = [];
 
-    // Yahoo 賽程列表中每一場比賽的外層容器
-    $('li, tr, div[class*="game"], div[class*="item"], div[class*="row"]').each((_, el) => {
-      const text = $(el).text().replace(/\s+/g, ' ').trim();
+    // 搜尋頁面上包含 CPBL 球隊的比分卡片
+    $('*').each((_, el) => {
+      // 避免太大的父節點
+      if ($(el).children().length > 10) return;
 
-      // 找出該區塊中出現的球隊
-      const foundTeams = CPBL_TEAMS.filter(team => text.includes(team));
-      
-      // 確保剛好抓到對戰的兩隊，且排除過長的外層父容器
-      if (foundTeams.length === 2 && text.length < 150) {
-        // 避免重複加入
-        const matchKey = `${foundTeams[0]}-${foundTeams[1]}`;
-        const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
-        
-        if (!matches.some(m => m.key === matchKey || m.key === reverseKey)) {
-          // 判斷賽事狀態
+      const text = $(el).text().replace(/\s+/g, ' ').trim();
+      const matchedTeams = CPBL_TEAMS.filter(team => text.includes(team));
+
+      // 剛好包含 2 支中職球隊，且長度合理（卡片區塊）
+      if (matchedTeams.length === 2 && text.length >= 8 && text.length <= 120) {
+        const key = `${matchedTeams[0]}-${matchedTeams[1]}`;
+        const reverseKey = `${matchedTeams[1]}-${matchedTeams[0]}`;
+
+        if (!matches.some(m => m.key === key || m.key === reverseKey)) {
           let statusBadge = "🟢 進行中 / 賽前";
-          if (text.includes("結束") || text.includes("Final") || text.includes("終場")) {
+          if (text.includes("結束") || text.includes("終場") || text.includes("Final")) {
             statusBadge = "🔴 比賽結束";
-          } else if (text.includes("延賽") || text.includes("取消")) {
+          } else if (text.includes("延賽") || text.includes("取消") || text.includes("因雨")) {
             statusBadge = "🌧️ 延賽 / 取消";
           }
 
           matches.push({
-            key: matchKey,
-            team1: foundTeams[0],
-            team2: foundTeams[1],
+            key,
+            team1: matchedTeams[0],
+            team2: matchedTeams[1],
             detail: text,
             status: statusBadge
           });
@@ -66,22 +61,14 @@ async function main() {
 
     if (matches.length > 0) {
       messageContent = matches.map(m => {
-        return `⚾ **${m.team1}** vs **${m.team2}**\n📊 **賽況**：${m.detail}\n📌 **狀態**：${m.status}`;
+        return `⚾ **${m.team1}** vs **${m.team2}**\n📊 **比分與戰況**：${m.detail}\n📌 **狀態**：${m.status}`;
       }).join('\n\n───────────────\n\n');
     } else {
-      // 兜底方案：直接從全頁文字中搜尋球隊對戰關鍵字
-      const fullBodyText = $('body').text().replace(/\s+/g, ' ');
-      const activeTeams = CPBL_TEAMS.filter(team => fullBodyText.includes(team));
-      
-      if (activeTeams.length >= 2) {
-        messageContent = `⚾ 今日排定有賽事出賽球隊：${[...new Set(activeTeams)].join('、')}\n（詳情請參閱轉播或賽程表）`;
-      } else {
-        messageContent = "ℹ️ 今日無排定之中華職棒賽事。";
-      }
+      messageContent = "ℹ️ 今日無排定之中華職棒賽事，或賽事尚未開始。";
     }
 
     const payload = {
-      content: `📢 **中華職棒 當日戰況 / 賽事比分**\n\n${messageContent.slice(0, 1800)}`
+      content: `📢 **中華職棒 當日戰況 / 最終比分**\n\n${messageContent.slice(0, 1800)}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
