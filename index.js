@@ -3,8 +3,6 @@ const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-const CPBL_TEAMS = ["中信兄弟", "統一獅", "統一7-ELEVEn獅", "味全龍", "富邦悍將", "樂天桃猿", "台鋼雄鷹"];
-
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
     console.error("❌ 錯誤：未找到 DISCORD_WEBHOOK_URL 環境變數，請確認 GitHub Secrets 設定。");
@@ -12,11 +10,13 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在抓取今日中職賽況與比分...");
+    console.log("🔍 正在從 中職官網 (CPBL) 抓取當日比分與戰況...");
 
-    const response = await axios.get('https://today.line.me/tw/v2/page/sports-baseball', {
+    // 抓取 CPBL 官網賽程比分頁
+    const response = await axios.get('https://www.cpbl.com.tw/schedule', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8'
       },
       timeout: 15000
@@ -25,31 +25,31 @@ async function main() {
     const $ = cheerio.load(response.data);
     const matches = [];
 
-    // 搜尋頁面上包含 CPBL 球隊的比分卡片
-    $('*').each((_, el) => {
-      // 避免太大的父節點
-      if ($(el).children().length > 10) return;
-
+    // CPBL 官網今日賽事通常在 .game_item 或賽程表格區塊內
+    // 遍歷所有賽事節點
+    $('.game_item, .schedule_item, tr, div[class*="game"]').each((_, el) => {
       const text = $(el).text().replace(/\s+/g, ' ').trim();
-      const matchedTeams = CPBL_TEAMS.filter(team => text.includes(team));
+      
+      const teams = ["中信兄弟", "統一7-ELEVEn獅", "統一獅", "味全龍", "富邦悍將", "樂天桃猿", "台鋼雄鷹"];
+      const foundTeams = teams.filter(team => text.includes(team));
 
-      // 剛好包含 2 支中職球隊，且長度合理（卡片區塊）
-      if (matchedTeams.length === 2 && text.length >= 8 && text.length <= 120) {
-        const key = `${matchedTeams[0]}-${matchedTeams[1]}`;
-        const reverseKey = `${matchedTeams[1]}-${matchedTeams[0]}`;
+      // 剛好對決兩隊
+      if (foundTeams.length === 2 && text.length < 200 && text.length > 10) {
+        const matchKey = `${foundTeams[0]}-${foundTeams[1]}`;
+        const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
 
-        if (!matches.some(m => m.key === key || m.key === reverseKey)) {
+        if (!matches.some(m => m.key === matchKey || m.key === reverseKey)) {
           let statusBadge = "🟢 進行中 / 賽前";
-          if (text.includes("結束") || text.includes("終場") || text.includes("Final")) {
+          if (text.includes("結束") || text.includes("終場") || text.includes("Final") || text.includes("比賽結束")) {
             statusBadge = "🔴 比賽結束";
           } else if (text.includes("延賽") || text.includes("取消") || text.includes("因雨")) {
             statusBadge = "🌧️ 延賽 / 取消";
           }
 
           matches.push({
-            key,
-            team1: matchedTeams[0],
-            team2: matchedTeams[1],
+            key: matchKey,
+            teamAway: foundTeams[0],
+            teamHome: foundTeams[1],
             detail: text,
             status: statusBadge
           });
@@ -61,14 +61,14 @@ async function main() {
 
     if (matches.length > 0) {
       messageContent = matches.map(m => {
-        return `⚾ **${m.team1}** vs **${m.team2}**\n📊 **比分與戰況**：${m.detail}\n📌 **狀態**：${m.status}`;
+        return `⚾ **${m.teamAway}** vs **${m.teamHome}**\n📊 **賽況與比分**：${m.detail}\n📌 **狀態**：${m.status}`;
       }).join('\n\n───────────────\n\n');
     } else {
       messageContent = "ℹ️ 今日無排定之中華職棒賽事，或賽事尚未開始。";
     }
 
     const payload = {
-      content: `📢 **中華職棒 當日戰況 / 最終比分**\n\n${messageContent.slice(0, 1800)}`
+      content: `📢 **中華職棒 今日戰況 / 最終比分**\n\n${messageContent.slice(0, 1800)}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
