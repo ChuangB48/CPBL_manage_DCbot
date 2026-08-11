@@ -8,6 +8,13 @@ const CPBL_TEAMS = [
   "富邦悍將", "樂天桃猿", "台鋼雄鷹"
 ];
 
+// 排行榜與新聞特徵關鍵字（一律過濾）
+const BLACKLIST_KEYWORDS = [
+  "盜壘", "打擊", "勝投", "安打", "防禦率", "打點", "全壘打", "救援", "中繼", "三振",
+  "橫掃", "再勝", "先發", "串聯", "擊退", "惜敗", "險勝", "例行賽編號", "補賽",
+  "報導", "新聞", "賽後", "影音", "特輯", "快訊"
+];
+
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
     console.error("❌ 錯誤：未找到 DISCORD_WEBHOOK_URL 環境變數，請確認 GitHub Secrets 設定。");
@@ -15,7 +22,7 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在從 CPBL 首頁頂部看板抓取最新賽程與即時比分...");
+    console.log("🔍 正在從 CPBL 官方首頁精確解析頂部賽事看板...");
 
     const response = await axios.get('https://www.cpbl.com.tw/', {
       headers: {
@@ -28,40 +35,36 @@ async function main() {
 
     const $ = cheerio.load(response.data);
 
-    // 1. 先把公告、跑馬燈、新聞、頁尾等非看板內容直接從 DOM 移除
-    $('marquee, footer, .marquee, .news, .notice, .bulletin, .rank, .standing, .sidebar').remove();
+    // 移除新聞、側欄、數據榜、跑馬燈 DOM 節點
+    $('footer, marquee, .news, .standing, .rank, .leaderboard, .sidebar, .banner, .video').remove();
 
     const matches = [];
 
-    // 2. 針對頁面頂部的賽事看板卡片節點進行掃描
-    // CPBL 頂部賽事看板通常位於 header 或是 swiper-slide / game_item 結構中
-    $('header, .header, .top_scoreboard, .swiper-wrapper, body').find('div, li, a').each((_, el) => {
-      // 限制節點層級，避免重複抓到外層大容器
-      if ($(el).children().length > 10) return;
+    // 遍歷所有節點，尋找「看板級」的賽事卡片
+    $('*').each((_, el) => {
+      // 排除子節點過多的父容器
+      if ($(el).children().length > 8) return;
 
       const rawText = $(el).text().replace(/\s+/g, ' ').trim();
 
-      // 嚴格排除補賽公告與歷史新聞常見字
-      if (
-        rawText.includes("例行賽編號") ||
-        rawText.includes("原場地進行補賽") ||
-        rawText.includes("延賽至") ||
-        rawText.includes("棒球場進行補賽") ||
-        rawText.includes("先發") ||
-        rawText.includes("盜壘")
-      ) {
-        return;
-      }
+      // 1. 命中黑名單（新聞/排行榜）直接跳過
+      const isBlacklisted = BLACKLIST_KEYWORDS.some(word => rawText.includes(word));
+      if (isBlacklisted) return;
 
-      // 比對是否有對決的 2 支球隊
-      const foundTeams = CPBL_TEAMS.filter(team => rawText.includes(team));
+      // 2. 必須包含中職球隊
+      const foundTeams = CPBL_TEAMS.filter(t => rawText.includes(t));
 
-      if (foundTeams.length === 2 && rawText.length >= 6 && rawText.length <= 90) {
+      // 3. 剛好兩隊對決，且長度符合看板卡片尺寸（10~70 字元）
+      if (foundTeams.length === 2 && rawText.length >= 8 && rawText.length <= 70) {
+        
+        // 4. 卡片內必須含有賽事特徵（時間格式 18:35、VS、分數字樣、結束、延賽等）
+        const hasMatchFeature = /(\d{1,2}:\d{2}|VS|vs|V\.S\.|結束|終場|Final|延賽|取消|LIVE|第\d局|\d+\s*[-:比]\s*\d+)/i.test(rawText);
+        if (!hasMatchFeature) return;
+
         const key = `${foundTeams[0]}-${foundTeams[1]}`;
         const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
 
         if (!matches.some(m => m.key === key || m.key === reverseKey)) {
-          // 狀態判定
           let statusEmoji = "🟢";
           let statusText = "進行中 / 賽前";
 
@@ -73,13 +76,11 @@ async function main() {
             statusText = "因雨延賽";
           }
 
-          // 嘗試抓取分數或局數等簡要資訊
-          // 如果卡片內有數字，過濾乾淨顯示
           matches.push({
             key,
             awayTeam: foundTeams[0],
             homeTeam: foundTeams[1],
-            info: rawText,
+            scoreboardText: rawText,
             status: `${statusEmoji} ${statusText}`
           });
         }
@@ -90,19 +91,19 @@ async function main() {
 
     if (matches.length > 0) {
       messageContent = matches.map(m => {
-        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📊 **賽況資訊**：${m.info}\n📌 **狀態**：${m.status}`;
+        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📊 **比分/看板**：${m.scoreboardText}\n📌 **狀態**：${m.status}`;
       }).join('\n\n───────────────\n\n');
     } else {
-      messageContent = "ℹ️ 首頁頂部目前無進行中賽事或排定賽程（可能今日無賽事）。";
+      messageContent = "ℹ️ 首頁目前無進行中賽事或排定賽程（今日無比賽或尚未開賽）。";
     }
 
     const payload = {
-      content: `📢 **中華職棒 官方今日即時賽況 / 比分看板**\n\n${messageContent}`
+      content: `📢 **中華職棒 今日即時賽況 / 比分看板**\n\n${messageContent}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播頂部看板賽事到 Discord！");
+    console.log("✅ 成功推播精確比分看板到 Discord！");
 
   } catch (error) {
     if (error.response) {
