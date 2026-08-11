@@ -10,9 +10,8 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在從 Yahoo 賽程比分頁面抓取戰況...");
-    
-    // 改抓賽程專頁，完全避開新聞干擾
+    console.log("🔍 正在從 Yahoo 賽程專頁抓取當日對戰比分...");
+
     const response = await axios.get('https://tw.sports.yahoo.com/cpbl/schedule/', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -25,38 +24,58 @@ async function main() {
     const $ = cheerio.load(response.data);
     const matches = [];
 
-    // 精準選取賽事列表中的每一場對戰區塊
-    // Yahoo 賽程頁面的比賽區塊通常為含有隊名與比分的列表項目
-    $('li.Py\\(12px\\), div.Py\\(12px\\), [data-test="schedule-item"], li[class*="game"]').each((_, el) => {
-      const text = $(el).text().replace(/\s+/g, ' ').trim();
-      
-      // 只要包含客隊/主隊與比分結構的文字
-      if (
-        (text.includes("兄弟") || text.includes("獅") || text.includes("龍") || text.includes("悍將") || text.includes("桃猿") || text.includes("雄鷹")) &&
-        !text.includes("報導") && !text.includes("新聞") && !text.includes("專欄")
-      ) {
-        if (text.length > 5 && text.length < 100) {
-          matches.push(text);
-        }
+    // 定位賽事列表每一列 (包含賽事狀態、球隊與比分)
+    $('div[class*="Mah(0)"], div[data-test="schedule-item"], li[class*="Py(12px)"], div[class*="Py(12px)"]').each((_, el) => {
+      const fullText = $(el).text().replace(/\s+/g, ' ').trim();
+
+      // 檢查是否包含中職隊伍
+      const teams = ["中信兄弟", "統一獅", "味全龍", "富邦悍將", "樂天桃猿", "台鋼雄鷹"];
+      const foundTeams = teams.filter(team => fullText.includes(team));
+
+      // 只要區塊內含有兩支對戰隊伍
+      if (foundTeams.length >= 2) {
+        // 抓取比分數字與狀態 (例如：結束、延賽、7局下)
+        const isFinished = fullText.includes("結束") || fullText.includes("Final");
+        const status = isFinished ? "🔴 比賽結束" : (fullText.includes("延賽") ? "🌧️ 延賽" : "🟢 進行中 / 賽前");
+
+        // 整理輸出排版
+        matches.push({
+          away: foundTeams[0],
+          home: foundTeams[1],
+          raw: fullText,
+          status: status
+        });
       }
     });
 
     let messageContent = "";
 
     if (matches.length > 0) {
-      messageContent = matches.map(m => `⚾ **${m}**`).join('\n\n');
+      // 避免重複賽事，進行去重
+      const uniqueMatches = [];
+      const seen = new Set();
+      for (const m of matches) {
+        const key = `${m.away}-${m.home}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueMatches.push(m);
+        }
+      }
+
+      messageContent = uniqueMatches.map(m => {
+        return `⚾ **${m.away}** vs **${m.home}**\n📋 **賽況簡述**：${m.raw}\n📌 **狀態**：${m.status}`;
+      }).join('\n\n───────────────\n\n');
     } else {
-      // 備用語音/文字：如果當天沒有抓到或已過比賽時間
-      messageContent = "ℹ️ 今日賽事已全數結束，或目前尚未有進行中的比賽。";
+      messageContent = "ℹ️ 今日無排定之中華職棒賽事。";
     }
 
     const payload = {
-      content: `📢 **中華職棒 今日賽事戰況**\n\n${messageContent}`
+      content: `📢 **中華職棒 當日戰況 / 最終比分**\n\n${messageContent.slice(0, 1800)}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播純比分戰況到 Discord！");
+    console.log("✅ 成功推播當日戰況到 Discord！");
 
   } catch (error) {
     if (error.response) {
