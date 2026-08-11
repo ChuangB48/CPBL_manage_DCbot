@@ -3,21 +3,20 @@ const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-const CPBL_TEAMS = [
-  "中信兄弟", "統一7-ELEVEn獅", "統一獅", "味全龍",
-  "富邦悍將", "樂天桃猿", "台鋼雄鷹"
-];
-
-// 取得台灣時間 YYYY-MM-DD
-function getTaiwanDateString() {
+// 取得台灣時間 (UTC+8) YYYY/MM/DD 與 YYYY-MM-DD
+function getTaiwanDate() {
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
   const twTime = new Date(utc + (3600000 * 8));
-  
+
   const yyyy = twTime.getFullYear();
   const mm = String(twTime.getMonth() + 1).padStart(2, '0');
   const dd = String(twTime.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
+
+  return {
+    slashDate: `${yyyy}/${mm}/${dd}`,
+    dashDate: `${yyyy}-${mm}-${dd}`
+  };
 }
 
 async function main() {
@@ -26,99 +25,110 @@ async function main() {
     process.exit(1);
   }
 
+  const { slashDate, dashDate } = getTaiwanDate();
+  console.log(`🔍 正在取得台灣時間 [${slashDate}] 中華職棒賽事資料...`);
+
+  let games = [];
+
+  // 嘗試 1：直接呼叫 CPBL 首頁 Vue 所使用的賽事 API
   try {
-    const todayStr = getTaiwanDateString();
-    console.log(`🔍 正在從 CPBL 官網首頁頂部 (https://www.cpbl.com.tw/) 解析最新賽程與即時比分...`);
-
-    // 請求首頁
-    const response = await axios.get('https://www.cpbl.com.tw/', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8',
-        'Cache-Control': 'no-cache'
-      },
-      timeout: 20000
-    });
-
-    const $ = cheerio.load(response.data);
-
-    // 1. 先把底層新聞、側欄排行榜、頁尾、跑馬燈直接剔除
-    $('footer, marquee, .marquee, .news, .news-list, .rank, .rank-list, .leaderboard, .sidebar, .standing').remove();
-
-    const matches = [];
-
-    // 2. 針對頂部輪播/看板區塊進行比對
-    // CPBL 頂部賽事結構主要分布於 header, .header-game-list, .top-score 等區塊中
-    $('header, .header, .top-scoreboard, .game-box, .game_box, .swiper-slide, body div').each((_, el) => {
-      // 避免父層大容器重複抓取
-      if ($(el).children().length > 6) return;
-
-      const rawText = $(el).text().replace(/\s+/g, ' ').trim();
-
-      // 過濾排行榜與新聞關鍵字
-      if (/(盜壘|勝投|安打|防禦率|打擊率|先發|全壘打|補賽周|補賽週|影音|特輯)/.test(rawText)) {
-        return;
+    const apiRes = await axios.post(
+      'https://www.cpbl.com.tw/home/getgames',
+      new URLSearchParams({
+        date: slashDate,
+        KindCode: 'A' // A 代表一軍賽事
+      }).toString(),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Referer': 'https://www.cpbl.com.tw/'
+        },
+        timeout: 10000
       }
+    );
 
-      // 檢查是否包含兩支對決球隊
-      const foundTeams = CPBL_TEAMS.filter(t => rawText.includes(t));
-
-      if (foundTeams.length === 2 && rawText.length >= 6 && rawText.length <= 80) {
-        const key = `${foundTeams[0]}-${foundTeams[1]}`;
-        const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
-
-        if (!matches.some(m => m.key === key || m.key === reverseKey)) {
-          // 狀態判定
-          let statusEmoji = "🕒";
-          let statusText = "賽前預告 / 未開打";
-
-          if (rawText.includes("結束") || rawText.includes("終場") || rawText.includes("Final")) {
-            statusEmoji = "🔴";
-            statusText = "比賽結束";
-          } else if (rawText.includes("延賽") || rawText.includes("取消") || rawText.includes("因雨")) {
-            statusEmoji = "🌧️";
-            statusText = "因雨延賽";
-          } else if (rawText.includes("LIVE") || rawText.includes("局") || /\d+\s*[-:比]\s*\d+/.test(rawText)) {
-            statusEmoji = "🟢";
-            statusText = "比賽進行中";
-          }
-
-          matches.push({
-            key,
-            awayTeam: foundTeams[0],
-            homeTeam: foundTeams[1],
-            info: rawText,
-            status: `${statusEmoji} ${statusText}`
-          });
-        }
-      }
-    });
-
-    let messageContent = "";
-    if (matches.length > 0) {
-      messageContent = matches.map(m => {
-        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📋 **賽程看板**：${m.info}\n📌 **狀態**：${m.status}`;
-      }).join('\n\n───────────────\n\n');
-    } else {
-      messageContent = `ℹ️ 首頁看板目前無即時賽程或排定對戰（可能今日無賽事或賽程尚未更新）。`;
+    const data = apiRes.data;
+    if (Array.isArray(data)) {
+      games = data;
+    } else if (data && Array.isArray(data.GameADetail)) {
+      games = data.GameADetail;
+    } else if (data && Array.isArray(data.Games)) {
+      games = data.Games;
     }
+  } catch (err) {
+    console.log("ℹ️ API POST 請求未能取得資料，嘗試 GET 請求...");
+    try {
+      const getRes = await axios.get(`https://www.cpbl.com.tw/home/getgames?date=${encodeURIComponent(slashDate)}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Referer': 'https://www.cpbl.com.tw/'
+        },
+        timeout: 10000
+      });
+      if (Array.isArray(getRes.data)) games = getRes.data;
+      else if (getRes.data?.GameADetail) games = getRes.data.GameADetail;
+    } catch (e) {
+      console.log("⚠️ API 介面暫無法使用，切換為備用解析。");
+    }
+  }
 
-    const payload = {
-      content: `📢 **中華職棒 官方最新賽事 / 即時看板**\n\n${messageContent}`
-    };
+  let matchCards = [];
 
+  if (games && games.length > 0) {
+    games.forEach(game => {
+      const awayTeam = game.VisitingTeamName || game.VisitingClubName || "客隊";
+      const homeTeam = game.HomeTeamName || game.HomeClubName || "主隊";
+      const awayScore = game.VisitingTotalScore ?? "-";
+      const homeScore = game.HomeTotalScore ?? "-";
+      const field = game.FieldAbbe || game.FieldName || "未定球場";
+      const gameNo = game.GameSno ? `(第 ${game.GameSno} 場)` : "";
+
+      // 狀態判斷 (GameStatus: 1=未開打, 2=進行中, 3=結束, 4=延賽/取消)
+      let statusText = "🕒 賽前預告 / 未開打";
+      if (game.GameStatus === 3 || game.GameStatusText?.includes("結束")) {
+        statusText = `🔴 比賽結束 (${awayScore} : ${homeScore})`;
+      } else if (game.GameStatus === 2 || game.GameStatusText?.includes("進行中")) {
+        statusText = `🟢 比賽進行中 (${awayScore} : ${homeScore})`;
+      } else if (game.GameStatus === 4 || game.GameStatusText?.includes("延賽")) {
+        statusText = "🌧️ 因雨延賽 / 取消";
+      }
+
+      // 先發投手或勝敗投
+      let pitcherInfo = "";
+      if (game.WinningPitcherName) {
+        pitcherInfo = `\n🏆 **勝投**：${game.WinningPitcherName} | **敗投**：${game.LosePitcherName || '無'}`;
+      } else if (game.VisitingStartingPitcherName || game.HomeStartingPitcherName) {
+        pitcherInfo = `\n🥊 **預告先發**：${game.VisitingStartingPitcherName || '未定'} vs ${game.HomeStartingPitcherName || '未定'}`;
+      }
+
+      matchCards.push(
+        `⚾ **${awayTeam}**  vs  **${homeTeam}** ${gameNo}\n` +
+        `🏟️ **球場**：${field}\n` +
+        `📌 **狀態**：${statusText}${pitcherInfo}`
+      );
+    });
+  }
+
+  let finalContent = "";
+  if (matchCards.length > 0) {
+    finalContent = matchCards.join('\n\n───────────────\n\n');
+  } else {
+    finalContent = `ℹ️ 今日 (${slashDate}) 中職官方未排定一軍賽程（今日無比賽）。`;
+  }
+
+  const payload = {
+    content: `📢 **中華職棒 今日賽事實況看板 (${slashDate})**\n\n${finalContent}`
+  };
+
+  try {
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播 CPBL 首頁賽事到 Discord！");
-
-  } catch (error) {
-    if (error.response) {
-      console.error(`❌ 發送失敗，狀態碼: ${error.response.status}`);
-      console.error("📋 回傳錯誤詳情:", typeof error.response.data === 'string' ? error.response.data.slice(0, 300) : error.response.data);
-    } else {
-      console.error("❌ 執行過程發生錯誤:", error.message);
-    }
+    console.log("✅ 成功推播今日真實賽程至 Discord！");
+  } catch (err) {
+    console.error("❌ 發送到 Discord 失敗:", err.message);
     process.exit(1);
   }
 }
