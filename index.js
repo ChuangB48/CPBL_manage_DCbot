@@ -8,12 +8,26 @@ const CPBL_TEAMS = [
   "富邦悍將", "樂天桃猿", "台鋼雄鷹"
 ];
 
-// 排行榜與新聞特徵關鍵字（一律過濾）
-const BLACKLIST_KEYWORDS = [
-  "盜壘", "打擊", "勝投", "安打", "防禦率", "打點", "全壘打", "救援", "中繼", "三振",
-  "橫掃", "再勝", "先發", "串聯", "擊退", "惜敗", "險勝", "例行賽編號", "補賽",
-  "報導", "新聞", "賽後", "影音", "特輯", "快訊"
-];
+// 取得台灣時間 (UTC+8) 的 MM/DD 與完整日期
+function getTaiwanDateInfo() {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const twTime = new Date(utc + (3600000 * 8));
+  
+  const yyyy = twTime.getFullYear();
+  const m = twTime.getMonth() + 1;
+  const d = twTime.getDate();
+
+  const mm = String(m).padStart(2, '0');
+  const dd = String(d).padStart(2, '0');
+  
+  return {
+    fullDate: `${yyyy}-${mm}-${dd}`,
+    dateQuery: `${yyyy}/${mm}/${dd}`,
+    shortDate: `${m}/${d}`, // 8/12
+    paddedDate: `${mm}/${dd}` // 08/12
+  };
+}
 
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
@@ -22,9 +36,11 @@ async function main() {
   }
 
   try {
-    console.log("🔍 正在從 CPBL 官方首頁精確解析頂部賽事看板...");
+    const dateInfo = getTaiwanDateInfo();
+    console.log(`🔍 正在抓取台灣時間 [${dateInfo.fullDate}] 的中職對戰賽程與比分...`);
 
-    const response = await axios.get('https://www.cpbl.com.tw/', {
+    // 抓取 CPBL 官方賽程表完整頁面
+    const response = await axios.get('https://www.cpbl.com.tw/schedule/index', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -34,39 +50,31 @@ async function main() {
     });
 
     const $ = cheerio.load(response.data);
-
-    // 移除新聞、側欄、數據榜、跑馬燈 DOM 節點
-    $('footer, marquee, .news, .standing, .rank, .leaderboard, .sidebar, .banner, .video').remove();
-
     const matches = [];
 
-    // 遍歷所有節點，尋找「看板級」的賽事卡片
+    // 移除公告與頁尾，避免雜訊
+    $('footer, marquee, .news, .notice').remove();
+
+    // 搜尋包含今天日期的賽事卡片或列表列
     $('*').each((_, el) => {
-      // 排除子節點過多的父容器
       if ($(el).children().length > 8) return;
 
       const rawText = $(el).text().replace(/\s+/g, ' ').trim();
 
-      // 1. 命中黑名單（新聞/排行榜）直接跳過
-      const isBlacklisted = BLACKLIST_KEYWORDS.some(word => rawText.includes(word));
-      if (isBlacklisted) return;
-
-      // 2. 必須包含中職球隊
+      // 檢查是否含有今天的日期特徵（如 08/12 或 8/12）以及對戰隊伍
+      const hasToday = rawText.includes(dateInfo.shortDate) || rawText.includes(dateInfo.paddedDate) || rawText.includes(dateInfo.fullDate);
       const foundTeams = CPBL_TEAMS.filter(t => rawText.includes(t));
 
-      // 3. 剛好兩隊對決，且長度符合看板卡片尺寸（10~70 字元）
-      if (foundTeams.length === 2 && rawText.length >= 8 && rawText.length <= 70) {
-        
-        // 4. 卡片內必須含有賽事特徵（時間格式 18:35、VS、分數字樣、結束、延賽等）
-        const hasMatchFeature = /(\d{1,2}:\d{2}|VS|vs|V\.S\.|結束|終場|Final|延賽|取消|LIVE|第\d局|\d+\s*[-:比]\s*\d+)/i.test(rawText);
-        if (!hasMatchFeature) return;
-
+      // 條件：必須剛好包含兩隊
+      if (foundTeams.length === 2 && rawText.length >= 8 && rawText.length <= 120) {
+        // 如果當前區塊有今日日期，或是父層屬於當日區塊
         const key = `${foundTeams[0]}-${foundTeams[1]}`;
         const reverseKey = `${foundTeams[1]}-${foundTeams[0]}`;
 
         if (!matches.some(m => m.key === key || m.key === reverseKey)) {
-          let statusEmoji = "🟢";
-          let statusText = "進行中 / 賽前";
+          // 狀態判定
+          let statusEmoji = "🕒";
+          let statusText = "賽前預告 / 未開打";
 
           if (rawText.includes("結束") || rawText.includes("終場") || rawText.includes("Final")) {
             statusEmoji = "🔴";
@@ -74,36 +82,66 @@ async function main() {
           } else if (rawText.includes("延賽") || rawText.includes("取消") || rawText.includes("因雨")) {
             statusEmoji = "🌧️";
             statusText = "因雨延賽";
+          } else if (rawText.includes("LIVE") || rawText.includes("局") || /\d+\s*[-:比]\s*\d+/.test(rawText)) {
+            statusEmoji = "🟢";
+            statusText = "比賽進行中";
           }
 
           matches.push({
             key,
             awayTeam: foundTeams[0],
             homeTeam: foundTeams[1],
-            scoreboardText: rawText,
+            info: rawText,
             status: `${statusEmoji} ${statusText}`
           });
         }
       }
     });
 
-    let messageContent = "";
+    // 若官方賽程頁因改版未命中，備用抓取首頁今日賽事卡片
+    if (matches.length === 0) {
+      const homeRes = await axios.get('https://www.cpbl.com.tw/', {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+      });
+      const $home = cheerio.load(homeRes.data);
+      $home('footer, marquee, .news, .standing, .rank, .leaderboard, .sidebar').remove();
 
+      $home('*').each((_, el) => {
+        if ($home(el).children().length > 6) return;
+        const text = $home(el).text().replace(/\s+/g, ' ').trim();
+        const found = CPBL_TEAMS.filter(t => text.includes(t));
+
+        if (found.length === 2 && text.length <= 60 && !/(盜壘|安打|排行榜|先發|補賽)/.test(text)) {
+          const key = `${found[0]}-${found[1]}`;
+          if (!matches.some(m => m.key === key)) {
+            matches.push({
+              key,
+              awayTeam: found[0],
+              homeTeam: found[1],
+              info: text,
+              status: "⚾ 當日排定賽程"
+            });
+          }
+        }
+      });
+    }
+
+    let messageContent = "";
     if (matches.length > 0) {
       messageContent = matches.map(m => {
-        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📊 **比分/看板**：${m.scoreboardText}\n📌 **狀態**：${m.status}`;
+        return `⚾ **${m.awayTeam}** vs **${m.homeTeam}**\n📋 **資訊**：${m.info}\n📌 **狀態**：${m.status}`;
       }).join('\n\n───────────────\n\n');
     } else {
-      messageContent = "ℹ️ 首頁目前無進行中賽事或排定賽程（今日無比賽或尚未開賽）。";
+      messageContent = `ℹ️ 今日 (${dateInfo.fullDate}) 中職官方未排定一軍賽事（休兵日）。`;
     }
 
     const payload = {
-      content: `📢 **中華職棒 今日即時賽況 / 比分看板**\n\n${messageContent}`
+      content: `📢 **中華職棒 今日賽事對戰列表 (${dateInfo.fullDate})**\n\n${messageContent}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播精確比分看板到 Discord！");
+    console.log("✅ 成功推播對戰列表到 Discord！");
 
   } catch (error) {
     if (error.response) {
