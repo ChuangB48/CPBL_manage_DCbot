@@ -20,41 +20,37 @@ async function main() {
     });
 
     const $ = cheerio.load(response.data);
-    const matchFields = [];
+    let matchContent = "";
 
     // 解析比分區塊
     $('.game_box, .item').each((_, element) => {
-      const awayTeam = $(element).find('.team_away, .away').text().trim() || "客隊";
-      const homeTeam = $(element).find('.team_home, .home').text().trim() || "主隊";
-      const score = $(element).find('.score').text().trim() || "未開打";
-      const status = $(element).find('.status, .inning').text().trim() || "賽事準備中";
+      const awayTeam = $(element).find('.team_away, .away').text().trim();
+      const homeTeam = $(element).find('.team_home, .home').text().trim();
+      const score = $(element).find('.score').text().trim();
+      const status = $(element).find('.status, .inning').text().trim();
 
-      // 只有在真的抓到有意義內容時才加入
-      if (awayTeam !== "客隊" || homeTeam !== "主隊") {
-        matchFields.push({
-          name: `⚾ ${awayTeam} vs ${homeTeam}`,
-          value: `> **比分**：${score}\n> **狀態**：${status}`,
-          inline: false
-        });
+      if (awayTeam && homeTeam) {
+        matchContent += `### ⚾ ${awayTeam} vs ${homeTeam}\n* **比分**：${score || '未開打'}\n* **狀態**：${status || '進行中'}\n\n`;
       }
     });
 
-    // 如果沒抓到任何比賽（非比賽時間或 selector 沒對到），給予預設卡片測試連線
-    if (matchFields.length === 0) {
-      console.log("ℹ️ 今日目前無進行中賽事卡片，發送預設通知測試。");
-      matchFields.push({
-        name: "⚾ 今日賽事快訊",
-        value: "今日目前非比賽進行時段，或尚未有最新比分資料更新。",
-        inline: false
-      });
+    // 如果沒有抓到比賽資訊，給予預設說明文字
+    if (!matchContent.trim()) {
+      matchContent = "ℹ️ 今日目前無正在進行中的賽事或非比賽時段。";
     }
 
+    // 組裝合規且美觀的 Discord Embed Payload
     const payload = {
+      username: "CPBL 戰況快報",
+      avatar_url: "https://www.cpbl.com.tw/images/logo.png",
       embeds: [
         {
-          title: "📢 中華職棒 即時戰況通知",
-          color: 0x1877f2,
-          fields: matchFields,
+          title: "📢 中華職棒 即時戰況",
+          description: matchContent,
+          color: 0x1877f2, // 職棒藍
+          footer: {
+            text: "資料來源：中華職棒官網"
+          },
           timestamp: new Date().toISOString()
         }
       ]
