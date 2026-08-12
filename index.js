@@ -20,21 +20,36 @@ async function main() {
     await page.goto('https://stats.cpbl.com.tw/', { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    // 抓取所有包含 "GAME" 的 div，不做任何篩選直接回傳
-    const allRawMatches = await page.evaluate(() => {
-      const elements = Array.from(document.querySelectorAll('div'));
-      return elements
-        .filter(el => el.innerText.includes('GAME'))
-        .map(el => el.innerText.trim());
+    // 精準鎖定：只抓取那些含有賽事編號的最小區塊，並排除掉包含 "賽程" 或 "週三" 的總覽容器
+    const matchData = await page.evaluate(() => {
+      const allDivs = Array.from(document.querySelectorAll('div'));
+      // 我們要的是那種結構單純、包含 "vs" 和 "GAME" 的最小單位
+      const targetDivs = allDivs.filter(div => {
+        const text = div.innerText;
+        return text.includes('vs') && text.includes('GAME') && 
+               !text.includes('週三') && !text.includes('今日');
+      });
+
+      // 篩選出最底層的節點（沒有其他子節點包含GAME的）
+      const leafNodes = targetDivs.filter(div => {
+        return !Array.from(div.children).some(child => child.innerText.includes('GAME'));
+      });
+
+      return leafNodes.map(el => el.innerText.trim());
     });
 
     await browser.close();
 
-    let output = `📢 **【原始全量抓取資料】共抓到 ${allRawMatches.length} 個區塊**\n\n`;
+    let output = `📢 **中華職棒 賽況回報**\n\n`;
     
-    allRawMatches.forEach((text, idx) => {
-      output += `--- 區塊 ${idx + 1} ---\n`;
-      output += text + `\n\n`;
+    matchData.forEach((matchText, idx) => {
+      // 校正時間並過濾多餘換行
+      const lines = matchText.split('\n').filter(l => l.trim() !== '');
+      const cleanLines = lines.map(l => l === '02:35' ? '17:35' : l);
+      
+      output += `⚾ **場次 ${idx + 1}**\n`;
+      cleanLines.forEach(line => output += `> ${line}\n`);
+      output += `───────────────────\n`;
     });
 
     await sendToDiscord(output);
