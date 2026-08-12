@@ -12,7 +12,12 @@ function getTaiwanDate() {
   const mm = String(twTime.getMonth() + 1).padStart(2, '0');
   const dd = String(twTime.getDate()).padStart(2, '0');
 
-  return `${yyyy}/${mm}/${dd}`;
+  return {
+    full: `${yyyy}/${mm}/${dd}`,
+    month: mm,
+    day: dd,
+    matchDateStr: `${parseInt(mm)}/${parseInt(dd)}`
+  };
 }
 
 async function main() {
@@ -21,8 +26,8 @@ async function main() {
     process.exit(1);
   }
 
-  const todayStr = getTaiwanDate();
-  console.log(`🌐 正在載入 CPBL 官網首頁解析一軍賽況 [${todayStr}]...`);
+  const dateInfo = getTaiwanDate();
+  console.log(`🌐 正在載入 CPBL 官方賽程頁面 [${dateInfo.full}]...`);
 
   const browser = await puppeteer.launch({
     headless: "new",
@@ -40,63 +45,74 @@ async function main() {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
-    await page.goto('https://www.cpbl.com.tw/', {
+    // 直接造訪 CPBL 官方一軍賽程專頁
+    await page.goto('https://www.cpbl.com.tw/schedule', {
       waitUntil: 'networkidle2',
       timeout: 45000
     });
 
-    // 等待 3 秒確保首頁 Vue 元件完全展開
-    await new Promise(r => setTimeout(r, 3000));
+    // 等待賽程表格完全渲染
+    await new Promise(r => setTimeout(r, 4000));
 
-    // 解析一軍賽事看板
-    const result = await page.evaluate(() => {
-      const majorList = document.querySelector('.IndexScheduleList.major');
-      if (!majorList) {
-        return { hasGames: false, rawText: "無法定位一軍賽事區塊" };
-      }
+    const scheduleData = await page.evaluate((targetDate) => {
+      const todayMatches = [];
+      const upcomingMatches = [];
+      const teamList = ["中信兄弟", "統一7-ELEVEn獅", "統一獅", "味全龍", "富邦悍將", "樂天桃猿", "台鋼雄鷹", "兄弟", "獅", "龍", "悍將", "桃猿", "雄鷹"];
 
-      const majorText = majorList.innerText.trim();
-      if (majorText.includes("本日尚無比賽") || majorText === "") {
-        return { hasGames: false, rawText: "本日尚無比賽" };
-      }
+      // 抓取賽程表格內的所有比賽列
+      const rows = document.querySelectorAll('tr, .ScheduleTable tr, .game_list_table tr, .daily_schedule');
 
-      // 當有比賽時，擷取每一個 game_item
-      const games = [];
-      const items = majorList.querySelectorAll('.game_item');
+      rows.forEach(row => {
+        const text = row.innerText || '';
+        const hasTeam = teamList.filter(t => text.includes(t));
 
-      items.forEach(item => {
-        const lines = item.innerText.split('\n').map(l => l.trim()).filter(Boolean);
-        if (lines.length > 0) {
-          games.push(lines.join(' | '));
+        if (hasTeam.length >= 2) {
+          const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+          const cleanText = lines.join(' | ');
+
+          // 判斷是否為今日賽事
+          if (text.includes(targetDate)) {
+            todayMatches.push(cleanText);
+          } else {
+            upcomingMatches.push(cleanText);
+          }
         }
       });
 
       return {
-        hasGames: games.length > 0,
-        games: games
+        todayMatches,
+        upcomingMatches: upcomingMatches.slice(0, 5) // 取近期前 5 場
       };
-    });
+    }, dateInfo.matchDateStr);
 
     await browser.close();
 
-    // 組織推播訊息
-    let messageContent = "";
-    if (result.hasGames && result.games && result.games.length > 0) {
-      const matchCards = result.games.map((gText, idx) => {
-        return `⚾ **賽事 ${idx + 1}**\n📝 **即時戰況**：${gText}`;
+    let outputCards = [];
+    let titlePrefix = "";
+
+    if (scheduleData.todayMatches.length > 0) {
+      titlePrefix = `📢 **中華職棒 今日官方賽事實況 (${dateInfo.full})**\n\n`;
+      scheduleData.todayMatches.forEach((match, idx) => {
+        outputCards.push(`⚾ **今日賽事 ${idx + 1}**\n📝 **資訊**：${match}`);
       });
-      messageContent = matchCards.join('\n\n───────────────\n\n');
     } else {
-      messageContent = `ℹ️ 今日 (${todayStr}) 中華職棒官方首頁顯示：**本日尚無比賽**（休兵日或賽程已結束）。`;
+      titlePrefix = `📢 **中華職棒 賽事實況看板 (${dateInfo.full})**\n\nℹ️ 今日官方未排定一軍例行賽。\n\n📅 **官方近期賽程預告**：\n\n`;
+      if (scheduleData.upcomingMatches.length > 0) {
+        scheduleData.upcomingMatches.forEach((match, idx) => {
+          outputCards.push(`📌 **近期場次 ${idx + 1}**\n${match}`);
+        });
+      } else {
+        outputCards.push("（目前賽程表暫無後續更新場次）");
+      }
     }
 
     const payload = {
-      content: `📢 **中華職棒 官網首頁賽事實況 (${todayStr})**\n\n${messageContent}`
+      content: `${titlePrefix}${outputCards.join('\n\n───────────────\n\n')}`
     };
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播官網賽事至 Discord！");
+    console.log("✅ 成功推播官方賽程至 Discord！");
 
   } catch (error) {
     if (browser) await browser.close();
