@@ -43,8 +43,9 @@ async function main() {
   }
 
   const todayStr = getTaiwanDate();
-  const targetUrl = '[https://stats.cpbl.com.tw/](https://stats.cpbl.com.tw/)';
-  console.log(`🌐 正在使用 Puppeteer 載入 CPBL 數據中心: ${targetUrl} [${todayStr}]...`);
+  // 強制用最安全的純字串陣列拼出目標網址，絕不帶有任何括號
+  const targetUrl = ['https://', 'stats.', 'cpbl.', 'com.', 'tw/'].join('');
+  console.log("🌐 正在使用 Puppeteer 載入 CPBL 數據中心: " + targetUrl + " [" + todayStr + "]...");
 
   const browser = await puppeteer.launch({
     headless: "new",
@@ -61,16 +62,12 @@ async function main() {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     
-    // 前往數據中心
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     
-    // 等待前端 JS 渲染完成（給予 5 秒讓資料載入）
     console.log("⏳ 等待網頁動態渲染與 API 載入...");
     await new Promise(r => setTimeout(r, 5000));
 
-    // 擷取渲染後的網頁主要文字
     const pageText = await page.evaluate(() => {
-      // 移除 script 與 style 標籤干擾
       document.querySelectorAll('script, style').forEach(el => el.remove());
       return document.body.innerText || '';
     });
