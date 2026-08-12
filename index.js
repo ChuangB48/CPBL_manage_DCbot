@@ -1,9 +1,13 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-// 清理與驗證 Discord Webhook URL
+// 強制清洗 GitHub Secrets 可能帶入的括號、引號或多餘字元
 let rawWebhook = process.env.DISCORD_WEBHOOK_URL || '';
-const DISCORD_WEBHOOK_URL = rawWebhook.trim().replace(/^["']|["']$/g, '');
+const DISCORD_WEBHOOK_URL = rawWebhook
+  .trim()
+  .replace(/^\[|\]$/g, '')  // 移除頭尾中括號
+  .replace(/^["']|["']$/g, '') // 移除頭尾引號
+  .replace(/\(|\)/g, '');      // 移除所有小括號
 
 function getTaiwanDate() {
   const now = new Date();
@@ -18,8 +22,8 @@ function getTaiwanDate() {
 }
 
 async function sendToDiscordInChunks(title, items) {
-  if (!DISCORD_WEBHOOK_URL || !DISCORD_WEBHOOK_URL.startsWith('http')) {
-    console.error("❌ DISCORD_WEBHOOK_URL 不是有效的 HTTP(S) 網址！請檢查 GitHub Secrets。");
+  if (!DISCORD_WEBHOOK_URL.startsWith('http')) {
+    console.error(`❌ 無效的 Webhook 網址: "${DISCORD_WEBHOOK_URL}"`);
     return;
   }
 
@@ -44,18 +48,11 @@ async function sendToDiscordInChunks(title, items) {
 
 async function main() {
   console.log("--------------------------------------------------");
-  if (!DISCORD_WEBHOOK_URL) {
-    console.error("❌ 錯誤：未設定 DISCORD_WEBHOOK_URL。");
-    process.exit(1);
-  } else if (!DISCORD_WEBHOOK_URL.startsWith('[https://discord.com/api/webhooks/](https://discord.com/api/webhooks/)')) {
-    console.warn("⚠️ 警告：DISCORD_WEBHOOK_URL 格式可能不正確（非標準 Discord Webhook 路徑）。");
-  } else {
-    console.log("✅ Webhook URL 格式檢驗通過。");
-  }
+  console.log(`🧹 清洗後的 Webhook 網址開頭: ${DISCORD_WEBHOOK_URL.slice(0, 30)}...`);
 
   const todayStr = getTaiwanDate();
   const targetUrl = '[https://www.cpbl.com.tw](https://www.cpbl.com.tw)';
-  console.log(`🌐 正在使用 Axios 請求 CPBL 首頁 HTML [${todayStr}] (${targetUrl})...`);
+  console.log(`🌐 正在請求目標網址: ${targetUrl} [${todayStr}]`);
 
   try {
     const response = await axios.get(targetUrl, {
@@ -85,20 +82,11 @@ async function main() {
     });
 
     console.log(`✅ 成功解析出 ${links.length} 個首頁導覽連結！正在推送至 Discord...`);
-    
-    // 在 Log 裡也直接印出前 15 筆以供除錯
-    links.slice(0, 15).forEach((item, i) => {
-      console.log(`[${i + 1}] ${item.text} -> ${item.href}`);
-    });
-
     await sendToDiscordInChunks(`【CPBL 官網首頁真實連結清單】(${todayStr})`, links);
     console.log("🎉 已全數發送至 Discord！");
 
   } catch (error) {
     console.error("❌ 請求失敗:", error.message);
-    if (error.config && error.config.url) {
-      console.error("出錯的 URL 是:", error.config.url);
-    }
     process.exit(1);
   }
 }
