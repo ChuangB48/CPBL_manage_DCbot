@@ -20,34 +20,21 @@ async function main() {
     await page.goto('https://stats.cpbl.com.tw/', { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    const matchData = await page.evaluate(() => {
-      // 這次我們只抓取含有 GAME 編號且文字行數在 5-10 行之間的元素
-      // 這能精準排除掉那個超長的總覽區塊 (場次 6)
+    // 抓取所有包含 "GAME" 的 div，不做任何篩選直接回傳
+    const allRawMatches = await page.evaluate(() => {
       const elements = Array.from(document.querySelectorAll('div'));
-      const validCards = elements.filter(el => {
-        const text = el.innerText;
-        return text.includes('GAME') && 
-               text.split('\n').length >= 5 && 
-               text.split('\n').length <= 12;
-      });
-
-      // 取得文字內容並去重
-      const rawMatches = validCards.map(el => el.innerText.trim());
-      return [...new Set(rawMatches)];
+      return elements
+        .filter(el => el.innerText.includes('GAME'))
+        .map(el => el.innerText.trim());
     });
 
     await browser.close();
 
-    let output = `📢 **中華職棒 完整戰況資訊**\n\n`;
+    let output = `📢 **【原始全量抓取資料】共抓到 ${allRawMatches.length} 個區塊**\n\n`;
     
-    matchData.forEach((matchText, idx) => {
-      // 進行時間校正與格式整理
-      const lines = matchText.split('\n').map(l => l.trim()).filter(Boolean);
-      const cleanLines = lines.map(l => l === '02:35' ? '17:35' : l);
-      
-      output += `⚾ **比賽 ${idx + 1}**\n`;
-      cleanLines.forEach(line => output += `> ${line}\n`);
-      output += `───────────────────\n`;
+    allRawMatches.forEach((text, idx) => {
+      output += `--- 區塊 ${idx + 1} ---\n`;
+      output += text + `\n\n`;
     });
 
     await sendToDiscord(output);
