@@ -20,37 +20,45 @@ async function main() {
     await page.goto('https://stats.cpbl.com.tw/', { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    // 精準鎖定：只抓取那些含有賽事編號的最小區塊，並排除掉包含 "賽程" 或 "週三" 的總覽容器
-    const matchData = await page.evaluate(() => {
+    // 抓取所有包含 "GAME" 的 div，並過濾掉包含整頁總覽的大容器
+    const rawMatches = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
-      // 我們要的是那種結構單純、包含 "vs" 和 "GAME" 的最小單位
-      const targetDivs = allDivs.filter(div => {
-        const text = div.innerText;
-        return text.includes('vs') && text.includes('GAME') && 
-               !text.includes('週三') && !text.includes('今日');
-      });
-
-      // 篩選出最底層的節點（沒有其他子節點包含GAME的）
-      const leafNodes = targetDivs.filter(div => {
-        return !Array.from(div.children).some(child => child.innerText.includes('GAME'));
-      });
-
-      return leafNodes.map(el => el.innerText.trim());
+      return allDivs
+        .map(div => div.innerText.trim())
+        .filter(text => text.includes('GAME') && text.includes('vs') && !text.includes('週三'));
     });
 
     await browser.close();
 
+    // 透過 Set 與比對 GAME 編號來精準去除重複區塊
+    const uniqueMatches = [];
+    const seenGames = new Set();
+
+    rawMatches.forEach(text => {
+      // 擷取出類似 GAME258 的編號作為唯一識別碼
+      const matchId = text.match(/GAME\d+/);
+      const key = matchId ? matchId[0] : text;
+
+      if (!seenGames.has(key)) {
+        seenGames.add(key);
+        uniqueMatches.push(text);
+      }
+    });
+
     let output = `📢 **中華職棒 賽況回報**\n\n`;
     
-    matchData.forEach((matchText, idx) => {
-      // 校正時間並過濾多餘換行
-      const lines = matchText.split('\n').filter(l => l.trim() !== '');
-      const cleanLines = lines.map(l => l === '02:35' ? '17:35' : l);
-      
-      output += `⚾ **場次 ${idx + 1}**\n`;
-      cleanLines.forEach(line => output += `> ${line}\n`);
-      output += `───────────────────\n`;
-    });
+    if (uniqueMatches.length > 0) {
+      uniqueMatches.forEach((matchText, idx) => {
+        const lines = matchText.split('\n').map(l => l.trim()).filter(Boolean);
+        const cleanLines = lines.map(l => l === '02:35' ? '17:35' : l);
+        
+        output += `⚾ **場次 ${idx + 1}**\n`;
+        cleanLines.forEach(line => output += `> ${line}\n`);
+        output += `───────────────────\n`;
+      });
+    } else {
+      output += `ℹ️ 目前無賽事資料。\n`;
+    }
 
     await sendToDiscord(output);
   } catch (error) {
