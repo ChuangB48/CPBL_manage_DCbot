@@ -36,7 +36,7 @@ async function main() {
 
   const todayStr = getTaiwanDate();
   const targetUrl = ['https://', 'stats.', 'cpbl.', 'com.', 'tw/'].join('');
-  console.log("🌐 正在載入 CPBL 數據中心解析戰況: " + targetUrl);
+  console.log("🌐 正在載入 CPBL 數據中心 DOM 元素解析: " + targetUrl);
 
   const browser = await puppeteer.launch({
     headless: "new",
@@ -54,49 +54,70 @@ async function main() {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    // 給予充分時間讓即時戰況完全渲染
     await new Promise(r => setTimeout(r, 6000));
 
-    // 以「比賽中」、「未開始」、「已完賽」作為錨點抓取周邊文字
-    const gameBlocks = await page.evaluate(() => {
-      const results = [];
-      const textNodes = document.body.innerText.split('\n').map(s => s.trim()).filter(Boolean);
+    // 直接在瀏覽器中透過 CSS 結構或特徵尋找獨立的賽事卡片 DOM 元素
+    const gameCards = await page.evaluate(() => {
+      const cards = [];
+      // 尋找網頁中所有可能代表比賽項目的區塊 (例如包含比分或對戰的 div)
+      const allDivs = document.querySelectorAll('div');
       
-      for (let i = 0; i < textNodes.length; i++) {
-        const text = textNodes[i];
-        if (text === '比賽中' || text === '未開始' || text === '已完賽') {
-          // 往回找 4 行，往往前看 8 行，確保把比分、隊名、場地包進來
-          const start = Math.max(0, i - 4);
-          const end = Math.min(textNodes.length, i + 8);
-          const sliceLines = textNodes.slice(start, end);
-          
-          results.push({
-            status: text,
-            lines: sliceLines
-          });
+      allDivs.forEach(div => {
+        const text = div.innerText || '';
+        // 篩選出同時包含「vs」且含有「比賽中」或「已完賽」或「未開始」的獨立區塊
+        if (text.includes('vs') && (text.includes('比賽中') || text.includes('已完賽') || text.includes('未開始'))) {
+          // 確保這是獨立的單一賽事卡片（避免抓到大範圍父容器）
+          if (div.children.length < 10 && text.length < 250) {
+            const cleanLines = text.split('\n').map(s => s.trim()).filter(Boolean);
+            cards.push(cleanLines);
+          }
         }
-      }
-      return results;
+      });
+
+      // 過濾掉內容完全重複的子容器
+      const uniqueCards = [];
+      const seen = new Set();
+      cards.forEach(c => {
+        const key = c.join('|');
+        // 確保不重複且包含對戰隊伍
+        if (!seen.has(key) && c.length >= 4) {
+          seen.add(key);
+          uniqueCards.push(c);
+        }
+      });
+
+      return uniqueCards;
     });
 
     await browser.close();
 
     let output = `📢 **中華職棒 即時賽況看板 (${todayStr})**\n\n`;
 
-    if (gameBlocks && gameBlocks.length > 0) {
-      gameBlocks.forEach((g, idx) => {
+    if (gameCards && gameCards.length > 0) {
+      gameCards.forEach((lines, idx) => {
+        const joinedStr = lines.join(' ');
         let badge = '📌';
-        if (g.status === '比賽中') badge = '🔴';
-        else if (g.status === '已完賽') badge = '🏁';
+        let status = '未開始';
+        if (joinedStr.includes('比賽中')) {
+          badge = '🔴';
+          status = '比賽中';
+        } else if (joinedStr.includes('已完賽')) {
+          badge = '🏁';
+          status = '已完賽';
+        }
 
-        output += `⚾ **賽事 ${idx + 1}** [${badge} ${g.status}]\n`;
-        output += `> ${g.lines.join(' ')}\n`;
+        output += `⚾ **場次 ${idx + 1}** [${badge} ${status}]\n`;
+        lines.forEach(line => {
+          output += `> ${line}\n`;
+        });
         output += `───────────────────\n`;
       });
     } else {
       output += `ℹ️ 今日 (${todayStr}) 尚無即時賽況資料。\n`;
     }
 
-    console.log("✅ 戰況解析完成，正在推送到 Discord...");
+    console.log("✅ DOM 賽況解析完成，正在推送到 Discord...");
     await sendToDiscord(output);
     console.log("🎉 推播成功！");
 
