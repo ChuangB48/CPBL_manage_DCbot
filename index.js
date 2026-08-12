@@ -1,7 +1,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-// 清洗 Webhook URL
+// 安全清洗 Webhook URL
 let rawWebhook = process.env.DISCORD_WEBHOOK_URL || '';
 const DISCORD_WEBHOOK_URL = rawWebhook
   .trim()
@@ -50,8 +50,8 @@ async function main() {
   console.log("--------------------------------------------------");
   const todayStr = getTaiwanDate();
   
-  // 直接寫死目標網址，絕不透過變數帶入，確保 100% 正確
-  const targetUrl = '[https://www.cpbl.com.tw](https://www.cpbl.com.tw)';
+  // 使用絕對安全的陣列合併來拼出網址，避免任何字串污染
+  const targetUrl = ['https://', 'www.', 'cpbl.', 'com.', 'tw'].join('');
   console.log(`🌐 正在請求目標網址: ${targetUrl} [${todayStr}]`);
 
   try {
