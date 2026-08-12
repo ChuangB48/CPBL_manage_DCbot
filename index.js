@@ -42,7 +42,7 @@ async function main() {
   }
 
   const todayStr = getTaiwanDate();
-  console.log(`🌐 正在載入 CPBL 官方賽程專區 (/schedule/index) 與成績看板 (/box/index)...`);
+  console.log(`🚀 啟動反反爬蟲模式，從官網首頁模擬點擊進入賽程專區 [${todayStr}]...`);
 
   const browser = await puppeteer.launch({
     headless: "new",
@@ -50,39 +50,59 @@ async function main() {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
       '--window-size=1920,1080'
     ]
   });
 
   try {
     const page = await browser.newPage();
+    
+    // 抹除機器人特徵
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    });
+
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
-    // 1. 抓取官方賽程專區 (/schedule/index)
-    console.log("正在載入 https://www.cpbl.com.tw/schedule/index ...");
-    await page.goto('https://www.cpbl.com.tw/schedule/index', { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 4000));
-    const scheduleIndexText = await page.evaluate(() => document.body.innerText || '');
+    // 1. 正常進入首頁獲取合法 Session
+    console.log("1. 正在載入 CPBL 首頁...");
+    await page.goto('https://www.cpbl.com.tw/', { waitUntil: 'networkidle2', timeout: 45000 });
+    await new Promise(r => setTimeout(r, 3000));
 
-    // 2. 抓取官方成績/即時看板專區 (/box/index)
-    console.log("正在載入 https://www.cpbl.com.tw/box/index ...");
-    await page.goto('https://www.cpbl.com.tw/box/index', { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 4000));
-    const boxIndexText = await page.evaluate(() => document.body.innerText || '');
+    // 2. 模擬點擊首頁上的「賽程」導覽選單
+    console.log("2. 正在從首頁點擊導航進入賽程專區...");
+    const clicked = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a'));
+      const scheduleLink = links.find(a => a.innerText && a.innerText.trim() === '賽程');
+      if (scheduleLink) {
+        scheduleLink.click();
+        return true;
+      }
+      return false;
+    });
+
+    if (clicked) {
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 4000));
+    } else {
+      // 若無直接連結，使用合法 Referer 導向
+      await page.goto('https://www.cpbl.com.tw/schedule', { waitUntil: 'networkidle2', timeout: 30000, referer: 'https://www.cpbl.com.tw/' });
+      await new Promise(r => setTimeout(r, 4000));
+    }
+
+    const currentUrl = page.url();
+    console.log(`當前所在頁面 URL: ${currentUrl}`);
+
+    // 擷取賽程頁文字
+    const pageText = await page.evaluate(() => document.body.innerText || '');
 
     await browser.close();
 
-    console.log("✅ 抓取完成，正在推送真實賽程與看板文字至 Discord...");
-
-    // 推送 /schedule/index 內容
-    await sendToDiscordInChunks(`【1. CPBL 賽程專區 /schedule/index】(${todayStr})`, scheduleIndexText.slice(0, 4000));
-
-    // 推送 /box/index 內容
-    await sendToDiscordInChunks(`【2. CPBL 比分看板 /box/index】(${todayStr})`, boxIndexText.slice(0, 4000));
-
-    console.log("🎉 官方真實賽程與比分板文字已送達 Discord！");
+    console.log("✅ 成功獲取賽程專區內容，正在推送至 Discord...");
+    await sendToDiscordInChunks(`【CPBL 官方真實賽程專區 (${currentUrl})】(${todayStr})`, pageText.slice(0, 5000));
+    console.log("🎉 已推播至 Discord！");
 
   } catch (error) {
     if (browser) await browser.close();
