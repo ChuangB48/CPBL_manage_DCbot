@@ -1,43 +1,90 @@
+const puppeteer = require('puppeteer');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-async function sendToDiscord(title, content) {
+function getTaiwanDate() {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const twTime = new Date(utc + (3600000 * 8));
+
+  const yyyy = twTime.getFullYear();
+  const mm = String(twTime.getMonth() + 1).padStart(2, '0');
+  const dd = String(twTime.getDate()).padStart(2, '0');
+
+  return `${yyyy}/${mm}/${dd}`;
+}
+
+async function sendToDiscordInChunks(title, content) {
   if (!DISCORD_WEBHOOK_URL) return;
-  const chunk = `📋 **${title}**\n\`\`\`text\n${content.slice(0, 1800)}\n\`\`\``;
-  await axios.post(DISCORD_WEBHOOK_URL, { content: chunk });
+  const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+  let currentChunk = `📋 **${title}**\n\`\`\`text\n`;
+
+  for (const line of lines) {
+    if ((currentChunk + line + '\n').length > 1800) {
+      currentChunk += '```';
+      await axios.post(DISCORD_WEBHOOK_URL, { content: currentChunk });
+      await new Promise(r => setTimeout(r, 800));
+      currentChunk = `📋 **${title} (接續)**\n\`\`\`text\n`;
+    }
+    currentChunk += line + '\n';
+  }
+
+  if (!currentChunk.endsWith('```')) {
+    currentChunk += '```';
+    await axios.post(DISCORD_WEBHOOK_URL, { content: currentChunk });
+  }
 }
 
 async function main() {
-  const targetUrl = 'https://stats.cpbl.com.tw/';
-  console.log(`🌐 正在抓取數據中心: ${targetUrl}`);
+  if (!DISCORD_WEBHOOK_URL) {
+    console.error("❌ 錯誤：未找到 DISCORD_WEBHOOK_URL。");
+    process.exit(1);
+  }
+
+  const todayStr = getTaiwanDate();
+  const targetUrl = '[https://stats.cpbl.com.tw/](https://stats.cpbl.com.tw/)';
+  console.log(`🌐 正在使用 Puppeteer 載入 CPBL 數據中心: ${targetUrl} [${todayStr}]...`);
+
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--window-size=1920,1080'
+    ]
+  });
 
   try {
-    // 模擬瀏覽器訪問數據中心
-    const response = await axios.get(targetUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' }
-    });
-
-    const $ = cheerio.load(response.data);
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     
-    // 抓取頁面主要內容 (例如：賽程表格、即時比分區塊)
-    // 這裡嘗試抓取常見的表格或文字結構
-    let results = '';
-    $('table, .schedule, .live-score').each((_, el) => {
-      results += $(el).text().replace(/\s+/g, ' ') + '\n';
+    // 前往數據中心
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    
+    // 等待前端 JS 渲染完成（給予 5 秒讓資料載入）
+    console.log("⏳ 等待網頁動態渲染與 API 載入...");
+    await new Promise(r => setTimeout(r, 5000));
+
+    // 擷取渲染後的網頁主要文字
+    const pageText = await page.evaluate(() => {
+      // 移除 script 與 style 標籤干擾
+      document.querySelectorAll('script, style').forEach(el => el.remove());
+      return document.body.innerText || '';
     });
 
-    if (!results) {
-      // 若抓不到表格，抓取 body 內的核心文字
-      results = $('body').text().replace(/\s+/g, ' ').slice(0, 1000);
-    }
+    await browser.close();
 
-    await sendToDiscord('【CPBL 即時數據中心最新狀態】', results || '目前無賽事資訊');
-    console.log("🎉 成功！");
+    console.log("✅ 成功獲取渲染後內容，正在推送至 Discord...");
+    await sendToDiscordInChunks(`【CPBL 數據中心即時比分與賽程】(${todayStr})`, pageText);
+    console.log("🎉 發送完成！");
 
   } catch (error) {
-    console.error("❌ 失敗:", error.message);
+    if (browser) await browser.close();
+    console.error("❌ 執行失敗:", error.message);
+    process.exit(1);
   }
 }
 
