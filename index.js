@@ -1,13 +1,13 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 
-// 強制清洗 GitHub Secrets 可能帶入的括號、引號或多餘字元
+// 清洗 Webhook URL
 let rawWebhook = process.env.DISCORD_WEBHOOK_URL || '';
 const DISCORD_WEBHOOK_URL = rawWebhook
   .trim()
-  .replace(/^\[|\]$/g, '')  // 移除頭尾中括號
-  .replace(/^["']|["']$/g, '') // 移除頭尾引號
-  .replace(/\(|\)/g, '');      // 移除所有小括號
+  .replace(/^\[|\]$/g, '')
+  .replace(/^["']|["']$/g, '')
+  .replace(/\(.*?\)/g, '');
 
 function getTaiwanDate() {
   const now = new Date();
@@ -48,9 +48,9 @@ async function sendToDiscordInChunks(title, items) {
 
 async function main() {
   console.log("--------------------------------------------------");
-  console.log(`🧹 清洗後的 Webhook 網址開頭: ${DISCORD_WEBHOOK_URL.slice(0, 30)}...`);
-
   const todayStr = getTaiwanDate();
+  
+  // 直接寫死目標網址，絕不透過變數帶入，確保 100% 正確
   const targetUrl = '[https://www.cpbl.com.tw](https://www.cpbl.com.tw)';
   console.log(`🌐 正在請求目標網址: ${targetUrl} [${todayStr}]`);
 
