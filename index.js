@@ -7,39 +7,21 @@ function getTaiwanDate() {
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
   const twTime = new Date(utc + (3600000 * 8));
-
-  const yyyy = twTime.getFullYear();
-  const mm = String(twTime.getMonth() + 1).padStart(2, '0');
-  const dd = String(twTime.getDate()).padStart(2, '0');
-
-  return `${yyyy}/${mm}/${dd}`;
+  return `${twTime.getFullYear()}/${String(twTime.getMonth() + 1).padStart(2, '0')}/${String(twTime.getDate()).padStart(2, '0')}`;
 }
 
 async function sendToDiscord(content) {
   if (!DISCORD_WEBHOOK_URL) return;
-  if (content.length > 1900) {
-    const chunks = content.match(/[\s\S]{1,1900}/g) || [];
-    for (const chunk of chunks) {
-      await axios.post(DISCORD_WEBHOOK_URL, { content: chunk });
-      await new Promise(r => setTimeout(r, 500));
-    }
-  } else {
-    await axios.post(DISCORD_WEBHOOK_URL, { content: content });
+  const chunks = content.match(/[\s\S]{1,1900}/g) || [content];
+  for (const chunk of chunks) {
+    await axios.post(DISCORD_WEBHOOK_URL, { content: chunk });
+    await new Promise(r => setTimeout(r, 500));
   }
 }
 
 async function main() {
-  if (!DISCORD_WEBHOOK_URL) {
-    process.exit(1);
-  }
-
-  const todayStr = getTaiwanDate();
   const targetUrl = ['https://', 'stats.', 'cpbl.', 'com.', 'tw/'].join('');
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
+  const browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox'] });
 
   try {
     const page = await browser.newPage();
@@ -47,68 +29,51 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    const matchCards = await page.evaluate(() => {
+    const allMatches = await page.evaluate(() => {
+      // 擴大篩選範圍，直接尋找包含關鍵資訊的節點，並保留所有子節點文字
       const cards = [];
-      const allElements = document.querySelectorAll('div');
+      const gameElements = document.querySelectorAll('div');
       
-      allElements.forEach(el => {
+      gameElements.forEach(el => {
         const text = el.innerText || '';
+        // 條件：必須包含對戰與賽事編號，且是一個獨立的比賽卡片
         if (text.includes('vs') && text.includes('GAME')) {
           const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
-          if (lines.length >= 4 && lines.length <= 25) cards.push(lines);
+          if (lines.length >= 3) cards.push(lines);
         }
       });
-
-      const uniqueCards = [];
-      const seen = new Set();
-      cards.sort((a, b) => a.length - b.length);
-      cards.forEach(c => {
-        const signature = c.filter(l => l.includes('GAME') || l.includes('vs')).join('_');
-        if (signature && !seen.has(signature)) {
-          seen.add(signature);
-          uniqueCards.push(c);
-        }
-      });
-      return uniqueCards;
+      return cards;
     });
 
     await browser.close();
 
-    let output = `📢 **中華職棒 即時賽況看板 (${todayStr})**\n\n`;
+    // 處理重複與過濾
+    const uniqueMatches = [];
+    const seen = new Set();
+    allMatches.sort((a, b) => a.length - b.length);
+    allMatches.forEach(c => {
+      const signature = c.filter(l => l.includes('GAME')).join('|');
+      if (signature && !seen.has(signature)) {
+        seen.add(signature);
+        uniqueMatches.push(c);
+      }
+    });
 
-    if (matchCards && matchCards.length > 0) {
-      matchCards.forEach((lines, idx) => {
-        // [數據校正邏輯]：將 02:35 強制校正為 17:35
-        const correctedLines = lines.map(line => 
-            line === '02:35' ? '17:35' : line
-        );
-        
-        const joinedStr = correctedLines.join(' ');
-        let badge = '📌';
-        let status = '未開始';
-
-        if (joinedStr.includes('比賽中')) {
-          badge = '🔴';
-          status = '比賽中';
-        } else if (joinedStr.includes('已完賽') || joinedStr.includes('終場')) {
-          badge = '🏁';
-          status = '已完賽';
-        }
-
-        output += `⚾ **場次 ${idx + 1}** [${badge} ${status}]\n`;
-        correctedLines.forEach(line => {
-          output += `> ${line}\n`;
-        });
-        output += `───────────────────\n`;
-      });
-    } else {
-      output += `ℹ️ 今日 (${todayStr}) 尚無即時賽況資料。\n`;
-    }
+    let output = `📢 **中華職棒 完整賽況資訊 (${getTaiwanDate()})**\n\n`;
+    
+    uniqueMatches.forEach((lines, idx) => {
+      // 校正時間邏輯
+      const finalLines = lines.map(l => l.includes('02:35') ? l.replace('02:35', '17:35') : l);
+      
+      output += `⚾ **場次 ${idx + 1}**\n`;
+      finalLines.forEach(line => output += `> ${line}\n`);
+      output += `───────────────────\n`;
+    });
 
     await sendToDiscord(output);
   } catch (error) {
     if (browser) await browser.close();
-    process.exit(1);
+    console.error(error);
   }
 }
 
