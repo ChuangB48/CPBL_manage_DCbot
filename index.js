@@ -1,9 +1,8 @@
-const puppeteer = require('puppeteer');
 const axios = require('axios');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
-// 取得台灣時間 (UTC+8)
+// 取得台灣時間 (UTC+8) YYYY/MM/DD
 function getTaiwanDate() {
   const now = new Date();
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
@@ -16,6 +15,43 @@ function getTaiwanDate() {
   return `${yyyy}/${mm}/${dd}`;
 }
 
+async function fetchOfficialCpblData(dateStr) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'X-Requested-With': 'XMLHttpRequest',
+    'Referer': 'https://www.cpbl.com.tw/box'
+  };
+
+  // 官方多重資料來源備援
+  const candidateUrls = [
+    `https://www.cpbl.com.tw/box/getgamelist?gameDate=${encodeURIComponent(dateStr)}&kindCode=A`,
+    `https://www.cpbl.com.tw/home/getgamelist?GameDate=${encodeURIComponent(dateStr)}&KindCode=A`,
+    `https://corsproxy.io/?${encodeURIComponent(`https://www.cpbl.com.tw/box/getgamelist?gameDate=${dateStr}&kindCode=A`)}`
+  ];
+
+  for (const url of candidateUrls) {
+    try {
+      console.log(`📡 正在嘗試請求官網數據端點: ${url}`);
+      const res = await axios.get(url, { headers, timeout: 10000 });
+      
+      let list = [];
+      if (Array.isArray(res.data)) list = res.data;
+      else if (Array.isArray(res.data?.GameADetail)) list = res.data.GameADetail;
+      else if (Array.isArray(res.data?.Games)) list = res.data.Games;
+      else if (Array.isArray(res.data?.list)) list = res.data.list;
+
+      if (list && list.length > 0) {
+        return list;
+      }
+    } catch (e) {
+      console.log(`端點請求異常: ${e.message}`);
+    }
+  }
+
+  return [];
+}
+
 async function main() {
   if (!DISCORD_WEBHOOK_URL) {
     console.error("❌ 錯誤：未找到 DISCORD_WEBHOOK_URL 環境變數。");
@@ -23,130 +59,44 @@ async function main() {
   }
 
   const todayStr = getTaiwanDate();
-  console.log(`🌐 啟動抗封鎖瀏覽器並監聽賽事封包 [${todayStr}]...`);
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled',
-      '--window-size=1920,1080'
-    ]
-  });
-
-  let interceptedGames = [];
+  console.log(`🔍 正在查詢中職官方即時賽況 [${todayStr}]...`);
 
   try {
-    const page = await browser.newPage();
-    
-    // 偽裝真實瀏覽器指紋，繞過 WAF 檢測
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-    await page.setViewport({ width: 1920, height: 1080 });
-
-    // 核心大招：監聽所有網路回應，攔截官網 Vue 接收到的賽事 JSON
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (url.includes('getgamelist') || url.includes('getschedule') || url.includes('Game') || url.includes('Schedule')) {
-        try {
-          const contentType = response.headers()['content-type'] || '';
-          if (contentType.includes('application/json')) {
-            const json = await response.json();
-            console.log(`📡 成功攔截到賽事 API 封包: ${url}`);
-            
-            let list = [];
-            if (Array.isArray(json)) list = json;
-            else if (Array.isArray(json.GameADetail)) list = json.GameADetail;
-            else if (Array.isArray(json.Games)) list = json.Games;
-            else if (Array.isArray(json.list)) list = json.list;
-
-            if (list.length > 0) {
-              interceptedGames = list;
-            }
-          }
-        } catch (e) {
-          // 忽略非 JSON 或無法解析的封包
-        }
-      }
-    });
-
-    console.log("📡 正在載入 CPBL 官網首頁...");
-    await page.goto('https://www.cpbl.com.tw/', {
-      waitUntil: 'networkidle2',
-      timeout: 45000
-    });
-
-    // 額外等待 3 秒讓非同步封包接收完成
-    await new Promise(r => setTimeout(r, 3000));
-
-    // 如果首頁沒抓到，前往賽程專頁再抓一次
-    if (interceptedGames.length === 0) {
-      console.log("📡 前往賽程頁進行二次監聽...");
-      await page.goto('https://www.cpbl.com.tw/schedule', {
-        waitUntil: 'networkidle2',
-        timeout: 45000
-      });
-      await new Promise(r => setTimeout(r, 3000));
-    }
-
-    // DOM 備用提取方案
-    let domGames = [];
-    if (interceptedGames.length === 0) {
-      console.log("🔍 啟用 DOM 解析備援...");
-      domGames = await page.evaluate(() => {
-        const list = [];
-        const items = document.querySelectorAll('.game_item, .IndexScheduleList .item, .ScheduleItem');
-        items.forEach(el => {
-          const text = el.innerText || '';
-          if (text.includes('vs') || text.includes('VS') || text.includes(':')) {
-            list.push(text.replace(/\n+/g, ' | '));
-          }
-        });
-        return list;
-      });
-    }
-
-    await browser.close();
-
-    // 格式化推播卡片
+    const games = await fetchOfficialCpblData(todayStr);
     let matchCards = [];
 
-    if (interceptedGames.length > 0) {
-      console.log(`✅ 成功從 API 封包中獲取 ${interceptedGames.length} 場賽事資料！`);
-      interceptedGames.forEach(game => {
-        const away = game.VisitingTeamName || game.VisitingClubName || "客隊";
-        const home = game.HomeTeamName || game.HomeClubName || "主隊";
-        const awayScore = game.VisitingTotalScore ?? "-";
-        const homeScore = game.HomeTotalScore ?? "-";
-        const field = game.FieldAbbe || game.FieldName || "未定球場";
+    if (games.length > 0) {
+      games.forEach(game => {
+        const away = game.VisitingTeamName || game.VisitingClubName || game.VisitingTeamCode || "客隊";
+        const home = game.HomeTeamName || game.HomeClubName || game.HomeTeamCode || "主隊";
+        const awayScore = (game.VisitingTotalScore !== undefined && game.VisitingTotalScore !== null && game.VisitingTotalScore !== '') ? game.VisitingTotalScore : "-";
+        const homeScore = (game.HomeTotalScore !== undefined && game.HomeTotalScore !== null && game.HomeTotalScore !== '') ? game.HomeTotalScore : "-";
+        const field = game.FieldAbbe || game.FieldName || "指定球場";
         const gameNo = game.GameSno ? `[第 ${game.GameSno} 場]` : "";
 
-        let status = "🕒 賽前預告 / 未開打";
-        if (game.GameStatus === 3 || (awayScore !== '-' && homeScore !== '-')) {
+        // 賽事狀態判斷
+        let status = "🕒 賽前預告 / 尚未開打";
+        if (game.GameStatus === 3 || game.GameStatusText?.includes("結束") || (awayScore !== '-' && homeScore !== '-')) {
           status = `🔴 比賽結束 (${awayScore} : ${homeScore})`;
-        } else if (game.GameStatus === 2) {
+        } else if (game.GameStatus === 2 || game.GameStatusText?.includes("進行中")) {
           status = `🟢 比賽進行中 (${awayScore} : ${homeScore})`;
+        } else if (game.GameStatus === 4 || game.GameStatusText?.includes("延賽")) {
+          status = "🌧️ 因雨延賽 / 取消";
         }
 
-        let extra = "";
-        if (game.VisitingStartingPitcherName || game.HomeStartingPitcherName) {
-          extra = `\n🥊 **預告先發**：${game.VisitingStartingPitcherName || '未定'} vs ${game.HomeStartingPitcherName || '未定'}`;
+        // 投手資訊
+        let pitcherInfo = "";
+        if (game.WinningPitcherName) {
+          pitcherInfo = `\n🏆 **勝投**：${game.WinningPitcherName} | **敗投**：${game.LosePitcherName || '無'}`;
+        } else if (game.VisitingStartingPitcherName || game.HomeStartingPitcherName) {
+          pitcherInfo = `\n🥊 **預告先發**：${game.VisitingStartingPitcherName || '未定'} (客) vs ${game.HomeStartingPitcherName || '未定'} (主)`;
         }
 
         matchCards.push(
           `⚾ **${away}** vs **${home}** ${gameNo}\n` +
           `🏟️ **球場**：${field}\n` +
-          `📌 **狀態**：${status}${extra}`
+          `📌 **狀態**：${status}${pitcherInfo}`
         );
-      });
-    } else if (domGames.length > 0) {
-      domGames.forEach(gText => {
-        matchCards.push(`⚾ **賽事資訊**：\n${gText}`);
       });
     }
 
@@ -163,11 +113,10 @@ async function main() {
 
     console.log("🚀 正在發送訊息至 Discord Webhook...");
     await axios.post(DISCORD_WEBHOOK_URL, payload);
-    console.log("✅ 成功推播到 Discord！");
+    console.log("✅ 成功推播官網賽事實況到 Discord！");
 
   } catch (error) {
-    if (browser) await browser.close();
-    console.error("❌ 執行失敗:", error.message);
+    console.error("❌ 執行發生錯誤:", error.message);
     process.exit(1);
   }
 }
