@@ -24,39 +24,43 @@ async function main() {
   try {
     const page = await browser.newPage();
     
-    // 設定真實瀏覽器的 User-Agent 與視窗大小
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1280, height: 800 });
 
     console.log("📡 正在前往 CPBL 首頁...");
     await page.goto('https://www.cpbl.com.tw/', {
       waitUntil: 'networkidle2',
-      timeout: 30000
+      timeout: 45000
     });
 
-    // 等待 Vue.js 渲染賽程卡片
-    console.log("⏳ 等待賽程看板渲染完成...");
-    await page.waitForSelector('.IndexScheduleList .game_item', { timeout: 10000 }).catch(() => {
-      console.log("⚠️ 未在時限內找到 .game_item，繼續嘗試解析...");
+    console.log("⏳ 等待 Vue.js 渲染完成（等待樣板標籤解析）...");
+    // 關鍵修復：等待日期欄位的 {{ ... }} 消失，確保 Vue 已經把資料填入畫面
+    await page.waitForFunction(() => {
+      const dateEl = document.querySelector('.date_selected .date, .IndexScheduleList .date');
+      return dateEl && !dateEl.innerText.includes('{{') && dateEl.innerText.trim().length > 0;
+    }, { timeout: 15000 }).catch(() => {
+      console.log("⚠️ 達到等待上限，嘗試強制提取...");
     });
 
-    // 從已渲染完成的 DOM 中提取資料
+    // 稍微延遲 1 秒確保動畫與子元件全部掛載
+    await new Promise(r => setTimeout(r, 1000));
+
+    // 從已渲染完成的 DOM 抓取真實資訊
     const gameData = await page.evaluate(() => {
       const results = [];
-      const items = document.querySelectorAll('.IndexScheduleList.major .game_item, .IndexSchedule .game_item');
+      const items = document.querySelectorAll('.IndexScheduleList .game_item, .game_box .game_item');
 
       items.forEach(item => {
-        const awayTeam = item.querySelector('.team.away .team_name')?.innerText?.trim() || '';
-        const homeTeam = item.querySelector('.team.home .team_name')?.innerText?.trim() || '';
-        const awayScore = item.querySelector('.score .num.away')?.innerText?.trim() || '-';
-        const homeScore = item.querySelector('.score .num.home')?.innerText?.trim() || '-';
-        const field = item.querySelector('.place')?.innerText?.trim() || '未定球場';
-        const gameNo = item.querySelector('.tag.game_no')?.innerText?.trim() || '';
-        const status = item.querySelector('.tag.game_status')?.innerText?.trim() || '賽前預告 / 未開打';
+        const awayTeam = item.querySelector('.team.away .team_name, .team.away .name')?.innerText?.trim() || '';
+        const homeTeam = item.querySelector('.team.home .team_name, .team.home .name')?.innerText?.trim() || '';
+        const awayScore = item.querySelector('.score .num.away, .away_score')?.innerText?.trim() || '-';
+        const homeScore = item.querySelector('.score .num.home, .home_score')?.innerText?.trim() || '-';
+        const field = item.querySelector('.place, .field')?.innerText?.trim() || '未定球場';
+        const gameNo = item.querySelector('.tag.game_no, .game_no')?.innerText?.trim() || '';
+        const status = item.querySelector('.tag.game_status, .status')?.innerText?.trim() || '賽事預定';
 
-        // 投手資訊
-        const winPitcher = item.querySelector('.PlayerMatchup.wins .player .name')?.innerText?.trim() || '';
-        const losePitcher = item.querySelector('.PlayerMatchup.loses .player .name')?.innerText?.trim() || '';
+        const winPitcher = item.querySelector('.PlayerMatchup.wins .name, .win_pitcher .name')?.innerText?.trim() || '';
+        const losePitcher = item.querySelector('.PlayerMatchup.loses .name, .lose_pitcher .name')?.innerText?.trim() || '';
 
         if (awayTeam && homeTeam) {
           results.push({
@@ -73,14 +77,15 @@ async function main() {
         }
       });
 
-      // 取得頁面顯示的日期
-      const dateText = document.querySelector('.date_selected .date')?.innerText?.trim() || '';
+      const dateEl = document.querySelector('.date_selected .date, .IndexScheduleList .date');
+      const dateText = (dateEl && !dateEl.innerText.includes('{{')) ? dateEl.innerText.trim() : '';
+
       return { dateText, results };
     });
 
     await browser.close();
 
-    console.log(`✅ 解析完成，共抓取到 ${gameData.results.length} 場賽事！`);
+    console.log(`✅ 解析完成，日期：[${gameData.dateText}]，共 ${gameData.results.length} 場賽事！`);
 
     let matchCards = [];
     gameData.results.forEach(g => {
@@ -95,7 +100,7 @@ async function main() {
       }
 
       matchCards.push(
-        `⚾ **${g.awayTeam}** vs **${g.homeTeam}** [${g.gameNo}]\n` +
+        `⚾ **${g.awayTeam}** vs **${g.homeTeam}** ${g.gameNo ? `[${g.gameNo}]` : ''}\n` +
         `🏟️ **球場**：${g.field}\n` +
         `${statusDesc}${pitcherDesc}`
       );
@@ -105,7 +110,7 @@ async function main() {
     if (matchCards.length > 0) {
       finalContent = matchCards.join('\n\n───────────────\n\n');
     } else {
-      finalContent = `ℹ️ 今日首頁未排定一軍賽事（可能為週一休兵日或賽程結束）。`;
+      finalContent = `ℹ️ 今日 (${gameData.dateText || '當日'}) 官網首頁未排定一軍賽事（可能為休兵日）。`;
     }
 
     const payload = {
