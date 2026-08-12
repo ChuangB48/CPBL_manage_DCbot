@@ -1,5 +1,5 @@
-const puppeteer = require('puppeteer');
 const axios = require('axios');
+const cheerio = require('cheerio');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
@@ -19,7 +19,7 @@ async function sendToDiscordInChunks(title, items) {
   let currentChunk = `📋 **${title}**\n\`\`\`text\n`;
 
   for (const item of items) {
-    const line = `${item.text.padEnd(12, ' ')} ➔ ${item.href}\n`;
+    const line = `${item.text.padEnd(14, ' ')} ➔ ${item.href}\n`;
     if ((currentChunk + line).length > 1800) {
       currentChunk += '```';
       await axios.post(DISCORD_WEBHOOK_URL, { content: currentChunk });
@@ -42,51 +42,41 @@ async function main() {
   }
 
   const todayStr = getTaiwanDate();
-  console.log(`🌐 正在載入 CPBL 首頁提取所有導覽連結與路徑 [${todayStr}]...`);
-
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--window-size=1920,1080'
-    ]
-  });
+  console.log(`🌐 正在使用 Axios 請求 CPBL 首頁 HTML [${todayStr}]...`);
 
   try {
-    const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-
-    await page.goto('[https://www.cpbl.com.tw/](https://www.cpbl.com.tw/)', {
-      waitUntil: 'networkidle2',
-      timeout: 45000
+    const response = await axios.get('[https://www.cpbl.com.tw/](https://www.cpbl.com.tw/)', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+      },
+      timeout: 20000
     });
-    await new Promise(r => setTimeout(r, 3000));
 
-    // 抓取首頁上所有 a 標籤的文字與 href
-    const allLinks = await page.evaluate(() => {
-      const links = [];
-      document.querySelectorAll('a').forEach(a => {
-        const text = (a.innerText || a.getAttribute('title') || '').trim().replace(/\n+/g, ' ');
-        const href = a.href || '';
-        if (text && href && !href.startsWith('javascript:')) {
+    const $ = cheerio.load(response.data);
+    const links = [];
+
+    $('a').each((_, el) => {
+      const text = ($(el).text() || $(el).attr('title') || '').trim().replace(/\s+/g, ' ');
+      let href = $(el).attr('href') || '';
+
+      if (href && !href.startsWith('javascript:')) {
+        if (href.startsWith('/')) {
+          href = `[https://www.cpbl.com.tw](https://www.cpbl.com.tw)${href}`;
+        }
+        if (text) {
           links.push({ text, href });
         }
-      });
-      return links;
+      }
     });
 
-    await browser.close();
-
-    console.log(`✅ 成功抓取到 ${allLinks.length} 個首頁導覽連結！正在推送至 Discord...`);
-    await sendToDiscordInChunks(`【CPBL 官網首頁所有可用真實連結】(${todayStr})`, allLinks);
-    console.log("🎉 發送完成！");
+    console.log(`✅ 成功解析出 ${links.length} 個首頁導覽連結！正在推送至 Discord...`);
+    await sendToDiscordInChunks(`【CPBL 官網首頁真實連結清單】(${todayStr})`, links);
+    console.log("🎉 已全數發送至 Discord！");
 
   } catch (error) {
-    if (browser) await browser.close();
-    console.error("❌ 執行失敗:", error.message);
+    console.error("❌ 請求失敗:", error.message);
     process.exit(1);
   }
 }
