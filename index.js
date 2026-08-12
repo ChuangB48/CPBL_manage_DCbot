@@ -51,19 +51,15 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 5000));
 
-    // 在瀏覽器端直接透過 DOM 結構精準萃取賽事方塊
     const matches = await page.evaluate(() => {
       const gameCards = [];
-      
-      // 尋找包含對戰組合的區塊（通常包含 v/s 或各隊名稱與場地）
-      // 我們依據文字內容或常見的容器進行抓取
       const textNodes = document.body.innerText.split('\n').map(s => s.trim()).filter(Boolean);
       
       let i = 0;
       while (i < textNodes.length) {
-        // 搜尋類似「一軍例行賽」或「二軍例行賽」的標籤
-        if (textNodes[i].includes('例行賽') || text.includes('總冠軍賽') || text.includes('季後賽')) {
-          const leagueType = textNodes[i];
+        const curText = textNodes[i];
+        if (curText.includes('例行賽') || curText.includes('總冠軍賽') || curText.includes('季後賽')) {
+          const leagueType = curText;
           const awayTeam = textNodes[i + 1] || '';
           const vsText = textNodes[i + 2] || '';
           const venue = textNodes[i + 3] || '';
@@ -84,30 +80,25 @@ async function main() {
         }
         i++;
       }
-
-      // 備援：若上方結構未命中，直接抓取純文字區塊中的對戰行
       return gameCards;
     });
 
     await browser.close();
 
-    // 格式化輸出
     let output = `📢 **中華職棒 賽事實況看板 (${dateInfo.full})**\n\n`;
 
-    // 如果網頁中有抓到結構化賽事
     if (matches && matches.length > 0) {
       matches.forEach((g, idx) => {
         output += `⚾ **場次 ${idx + 1}：${g.awayTeam} vs ${g.homeTeam}**\n`;
         output += `🏟️ **比賽場地**：${g.venue || '未指定'}\n`;
         output += `⏰ **開賽時間 / 狀態**：${g.timeOrStatus}\n`;
         
-        // 判斷狀態
         if (g.timeOrStatus.includes('未開始')) {
-          output += `📌 **預定狀態**：未開始（將於賽前顯示預計先發與打線）\n`;
+          output += `📌 **預定狀態**：未開始\n`;
         } else if (g.timeOrStatus.includes('進行中') || g.timeOrStatus.includes('局')) {
           output += `🔴 **即時賽況**：比賽進行中\n`;
         } else {
-          output += `🏁 **比賽結果**：已結束 / 完賽\n`;
+          output += `🏁 **比賽結果**：已完賽\n`;
         }
         output += `───────────────────\n`;
       });
