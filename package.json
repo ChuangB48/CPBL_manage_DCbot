@@ -1,15 +1,15 @@
 {
   "name": "cpbl-discord-bot",
   "version": "1.0.0",
-  "description": "中華職棒即時比分 Discord 推播",
-  "main": "index.js",
+  "description": "CPBL Match Scraper & Discord Bot",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node bot.js",
+    "github-action": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.0",
-    "cheerio": "^1.0.0-rc.12",
-    "discord.js": "^14.27.0",
-    "puppeteer": "^25.6.0"
+    "axios": "^1.6.8",
+    "discord.js": "^14.14.1",
+    "puppeteer": "^22.6.5"
   }
 }

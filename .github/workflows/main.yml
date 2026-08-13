@@ -8,7 +8,7 @@ on:
     # 2. 每天台灣時間 02:00 自動清理與更新語音頻道 (UTC 18:00)
     - cron: '0 18 * * *'
 
-  # 支援在 GitHub Actions 頁面手動點擊按鈕觸發
+  # 支援在 GitHub 頁面手動按鈕觸發
   workflow_dispatch:
     inputs:
       action_mode:
@@ -45,7 +45,6 @@ jobs:
           DISCORD_CATEGORY_ID: ${{ secrets.DISCORD_CATEGORY_ID }}
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            # 依據觸發當下的 UTC 小時數判斷執行模式
             UTC_HOUR=$(date -u +%H)
             if [ "$UTC_HOUR" = "14" ]; then
               echo "⏰ 觸發 22:00 定時賽況推播"
@@ -57,7 +56,6 @@ jobs:
               node index.js --mode=all
             fi
           else
-            # 手動觸發時使用選擇的模式
             MODE="${{ github.event.inputs.action_mode }}"
             echo "✋ 手動觸發執行模式: $MODE"
             node index.js --mode=$MODE
