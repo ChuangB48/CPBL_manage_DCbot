@@ -1,3 +1,6 @@
+// 強制設定 Node.js 環境時區為台灣時間
+process.env.TZ = 'Asia/Taipei';
+
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 
@@ -5,9 +8,10 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
 function getTaiwanDate() {
   const now = new Date();
-  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-  const twTime = new Date(utc + (3600000 * 8));
-  return `${twTime.getFullYear()}/${String(twTime.getMonth() + 1).padStart(2, '0')}/${String(twTime.getDate()).padStart(2, '0')}`;
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}/${mm}/${dd}`;
 }
 
 async function sendToDiscord(content) {
@@ -21,16 +25,22 @@ async function sendToDiscord(content) {
 
 async function main() {
   const targetUrl = 'https://stats.cpbl.com.tw/';
-  const browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const browser = await puppeteer.launch({ 
+    headless: "new", 
+    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+  });
   
   try {
     const page = await browser.newPage();
+    
+    // 💡 關鍵設定：強制瀏覽器模仿台灣時區
+    await page.emulateTimezone('Asia/Taipei');
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+    
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    // 等待動態資料載入
     await new Promise(r => setTimeout(r, 6000));
 
-    // 1. 粗略抓取所有包含 "vs" 與 "GAME" 的區塊
+    // 1. 抓取包含 GAME 與 vs 的區塊
     const rawMatches = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
       return allDivs
@@ -40,19 +50,17 @@ async function main() {
 
     await browser.close();
 
-    // 2. 核心邏輯：依照字串長度由短到長排序！(確保優先處理最乾淨的子容器)
+    // 2. 依照長度排序，優先取最小容器
     rawMatches.sort((a, b) => a.length - b.length);
 
     const uniqueMatches = [];
     const seenGames = new Set();
 
-    // 3. 處理去重
+    // 3. 去重
     rawMatches.forEach(text => {
       const matchIds = text.match(/GAME\d+/g) || [];
-      // 確保這個區塊只包含一場比賽的資訊
       if (matchIds.length === 1) {
         const gameId = matchIds[0];
-        // 如果這個 GAME 編號還沒被收錄過，就加進去
         if (!seenGames.has(gameId)) {
           seenGames.add(gameId);
           uniqueMatches.push(text);
@@ -60,18 +68,16 @@ async function main() {
       }
     });
 
-    // 4. 準備輸出訊息
+    // 4. 輸出結果
     const todayStr = getTaiwanDate();
     let output = `📢 **中華職棒 賽況回報 (${todayStr})**\n\n`;
     
     if (uniqueMatches.length > 0) {
       uniqueMatches.forEach((matchText, idx) => {
-        // 清理多餘換行並校正時間
         const lines = matchText.split('\n').map(l => l.trim()).filter(Boolean);
-        const cleanLines = lines.map(l => l === '02:35' ? '17:35' : l);
         
         output += `⚾ **場次 ${idx + 1}**\n`;
-        cleanLines.forEach(line => output += `> ${line}\n`);
+        lines.forEach(line => output += `> ${line}\n`);
         output += `───────────────────\n`;
       });
     } else {
