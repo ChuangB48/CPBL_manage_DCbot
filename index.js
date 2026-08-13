@@ -96,7 +96,7 @@ function formatMatchInfo(matchObj) {
     matchupLine = `> ⚔️ ${otherLines.join(' vs ')}`;
   }
 
-  // 5. 當前投手 vs 打者對決狀態
+  // 5. 當前投手 vs 打者對決狀態 (有抓到正確名字才顯示)
   let pbLine = '';
   if (pitcher || batter) {
     const pStr = pitcher ? `🎯 投手：**${pitcher}**` : '';
@@ -122,7 +122,7 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    // 1. 抓取卡片資訊與詳細頁連結 (boxUrl)
+    // 1. 抓取卡片資訊與詳細頁連結
     const matchesData = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
       
@@ -147,7 +147,6 @@ async function main() {
         if (seen.has(gameId)) continue;
         seen.add(gameId);
 
-        // 尋找此卡片內的比賽詳細頁連結
         const anchor = card.querySelector('a') || card.closest('a');
         const boxUrl = anchor ? anchor.href : '';
 
@@ -162,7 +161,7 @@ async function main() {
       return results;
     });
 
-    // 2. 對於「進行中」的比賽，開啟詳細頁抓取「局數」與「投手 vs 打者」
+    // 2. 對於「進行中」的比賽，點進詳細頁抓取真正的局數與投打
     for (let match of matchesData) {
       if (match.status === '進行中' && match.boxUrl) {
         try {
@@ -175,22 +174,41 @@ async function main() {
           const detailData = await detailPage.evaluate(() => {
             const fullText = document.body.innerText;
 
-            // 抓局數 (例: 3局上, 5下)
+            // 抓取局數
             let inning = '';
             const inningMatch = fullText.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
             if (inningMatch) {
               inning = `${inningMatch[1]}局${inningMatch[2]}`;
             }
 
-            // 抓投手
-            let pitcher = '';
-            const pMatch = fullText.match(/(?:投手|投\s*手|P)\s*[:：]?\s*([\u4e00-\u9fa5]{2,8})/);
-            if (pMatch) pitcher = pMatch[1];
+            // 表格標頭黑名單，避免誤抓標題文字
+            const invalidNames = [
+              '局數', '打席', '打數', '安打', '得分', '打點', '三振', '四壞', '四死',
+              '失分', '自責分', '投球數', '防禦率', '先發', '替補', '合計', '成績',
+              '紀錄', '投手', '打者', '守備', '代打', '代跑', '勝投', '敗投', '救援'
+            ];
 
-            // 抓打者
+            // 抓取投手
+            let pitcher = '';
+            const pMatches = Array.from(fullText.matchAll(/(?:投手|投\s*手|P)\s*[:：]?\s*([\u4e00-\u9fa5·•]{2,8})/g));
+            for (const m of pMatches) {
+              const candidate = m[1].trim();
+              if (!invalidNames.some(inv => candidate.includes(inv))) {
+                pitcher = candidate;
+                break;
+              }
+            }
+
+            // 抓取打者
             let batter = '';
-            const bMatch = fullText.match(/(?:打者|打\s*者|B)\s*[:：]?\s*([\u4e00-\u9fa5]{2,8})/);
-            if (bMatch) batter = bMatch[1];
+            const bMatches = Array.from(fullText.matchAll(/(?:打者|打\s*者|B)\s*[:：]?\s*([\u4e00-\u9fa5·•]{2,8})/g));
+            for (const m of bMatches) {
+              const candidate = m[1].trim();
+              if (!invalidNames.some(inv => candidate.includes(inv))) {
+                batter = candidate;
+                break;
+              }
+            }
 
             return { inning, pitcher, batter };
           });
