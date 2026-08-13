@@ -1,15 +1,13 @@
 {
-  "name": "cpbl-discord-bot",
+  "name": "cpbl-score-webhook",
   "version": "1.0.0",
-  "description": "CPBL Match Scraper & Discord Bot",
-  "main": "bot.js",
+  "description": "CPBL Score Webhook Scraper powered by GitHub Actions",
+  "main": "index.js",
   "scripts": {
-    "start": "node bot.js",
-    "github-action": "node index.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.6.8",
-    "discord.js": "^14.14.1",
-    "puppeteer": "^22.6.5"
+    "puppeteer": "^22.6.0"
   }
 }

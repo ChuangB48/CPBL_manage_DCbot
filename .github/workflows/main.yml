@@ -1,62 +1,30 @@
-name: CPBL Match Scraper & Discord Bot
+name: CPBL Score Auto Scraper
 
 on:
   schedule:
-    # 1. 每天台灣時間 22:00 自動傳送賽況回報 (UTC 14:00)
-    - cron: '0 14 * * *'
-    
-    # 2. 每天台灣時間 02:00 自動清理與更新語音頻道 (UTC 18:00)
-    - cron: '0 18 * * *'
-
-  # 支援在 GitHub 頁面手動按鈕觸發
+    # 台灣時間 17:00 ~ 23:00，每 15 分鐘執行一次 (對應 UTC 時間 09:00 ~ 15:00)
+    - cron: '*/15 9-15 * * *'
+  
+  # 允許在 GitHub 網頁上手動按按鈕觸發測試
   workflow_dispatch:
-    inputs:
-      action_mode:
-        description: '請選擇要執行的模式'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - report_only
-          - voice_only
 
 jobs:
-  run-scraper:
+  scrape-and-push:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Run CPBL Scraper & Discord Bot
+      - name: Run Scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
-          DISCORD_CATEGORY_ID: ${{ secrets.DISCORD_CATEGORY_ID }}
-        run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            UTC_HOUR=$(date -u +%H)
-            if [ "$UTC_HOUR" = "14" ]; then
-              echo "⏰ 觸發 22:00 定時賽況推播"
-              node index.js --mode=report
-            elif [ "$UTC_HOUR" = "18" ]; then
-              echo "⏰ 觸發 02:00 語音頻道自動清理與建立"
-              node index.js --mode=voice
-            else
-              node index.js --mode=all
-            fi
-          else
-            MODE="${{ github.event.inputs.action_mode }}"
-            echo "✋ 手動觸發執行模式: $MODE"
-            node index.js --mode=$MODE
-          fi
+        run: node index.js
