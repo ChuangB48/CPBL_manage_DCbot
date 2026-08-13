@@ -138,18 +138,15 @@ async function manageVoiceChannels(matchesData) {
       try {
         category = await guild.channels.fetch(DISCORD_CATEGORY_ID);
         
-        // 驗證抓到的頻道類型是否真的為類別 (Category)
         if (category && category.type !== ChannelType.GuildCategory) {
-          console.error(`❌ 設定的 ID (${DISCORD_CATEGORY_ID}) 不是類別 (Category)，而是一般頻道！請重新複製類別 ID。`);
+          console.error(`❌ 設定的 ID (${DISCORD_CATEGORY_ID}) 不是類別 (Category)！`);
           category = null;
         }
       } catch (e) {
         console.error(`❌ 找不到類別 ID (${DISCORD_CATEGORY_ID})，錯誤訊息:`, e.message);
-        console.error("👉 請檢查：1. ID 是否正確 2. Bot 是否有該類別的「檢視頻道/管理頻道」權限。");
       }
     }
 
-    // 若未設定有效 ID，停止建立語音頻道（避免開錯地方或擅自新建類別）
     if (!category) {
       console.error("⚠️ 未成功取得有效的目標類別，停止建立語音頻道。");
       return;
@@ -166,18 +163,31 @@ async function manageVoiceChannels(matchesData) {
       await channel.delete('清理舊賽事頻道');
     }
 
-    // 2. 依照今日比賽建立語音頻道
+    // 2. 依照今日比賽建立語音頻道與設定頻道狀態
     for (const match of matchesData) {
-      const teams = (match.awayTeam && match.homeTeam) 
-        ? `${match.awayTeam}vs${match.homeTeam}` 
-        : '';
-      const channelName = `🔊 ${match.gameId} ${teams}`.trim();
+      // 頻道名稱：僅設置賽事編號（例：🔊 GAME261）
+      const channelName = `🔊 ${match.gameId}`.trim();
 
-      await guild.channels.create({
+      const channel = await guild.channels.create({
         name: channelName.slice(0, 100),
         type: ChannelType.GuildVoice,
         parent: category.id,
       });
+
+      // 頻道狀態：設置為對戰組合（例：⚔️ 中信 vs 富邦）
+      const matchupStatus = (match.awayTeam && match.homeTeam)
+        ? `⚔️ ${match.awayTeam} vs ${match.homeTeam}`
+        : '⚔️ 對戰組合未定';
+
+      try {
+        // 透過 Discord API 設定 Voice Channel Status
+        await client.rest.put(
+          `/channels/${channel.id}/voice-status`,
+          { body: { status: matchupStatus } }
+        );
+      } catch (err) {
+        console.error(`無法設定 ${match.gameId} 的語音頻道狀態:`, err.message);
+      }
     }
 
     console.log(`已成功在「${category.name}」類別下建立今日 ${matchesData.length} 場語音頻道！`);
@@ -261,7 +271,6 @@ async function main() {
               inning = `${inningMatch[1]}局${inningMatch[2]}`;
             }
 
-            // 黑名單過濾表格標題與術語
             const invalidNames = [
               '局數', '打席', '打數', '安打', '得分', '打點', '三振', '四壞', '四死',
               '失分', '自責分', '投球數', '防禦率', '先發', '替補', '合計', '成績',
