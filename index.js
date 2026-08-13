@@ -165,8 +165,8 @@ async function manageVoiceChannels(matchesData) {
 
     // 2. 建立新頻道並設定 Voice Channel Status
     for (const match of matchesData) {
-      // 頻道名稱：僅保留賽事編號（例：🔊 GAME261）
-      const channelName = `🔊 ${match.gameId}`.trim();
+      // 頻道名稱：僅保留賽事編號（例：GAME261）
+      const channelName = `${match.gameId}`.trim();
 
       const channel = await guild.channels.create({
         name: channelName.slice(0, 100),
@@ -174,10 +174,10 @@ async function manageVoiceChannels(matchesData) {
         parent: category.id,
       });
 
-      // 頻道狀態：對戰組合（例：⚔️ 中信 vs 富邦）
+      // 頻道狀態：對戰組合（例：中信 vs 富邦）
       const matchupStatus = (match.awayTeam && match.homeTeam)
-        ? `⚔️ ${match.awayTeam} vs ${match.homeTeam}`
-        : '⚔️ 對戰組合未定';
+        ? `${match.awayTeam} vs ${match.homeTeam}`
+        : '對戰組合未定';
 
       try {
         await client.rest.put(
