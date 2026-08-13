@@ -22,9 +22,9 @@ async function sendToDiscord(content) {
   }
 }
 
-// 將抓到的純文字結構化，轉換為易讀的 Discord 格式
+// 格式化單場賽事資訊
 function formatMatchInfo(matchObj) {
-  const { gameId, rawText, inning } = matchObj;
+  const { gameId, rawText, inning, pitcher, batter } = matchObj;
   const rawLines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
 
   let gameType = '';
@@ -45,21 +45,21 @@ function formatMatchInfo(matchObj) {
     } else if (/^\d+\s*[:：]\s*\d+$/.test(line)) {
       score = line;
     } else if (/^\d+-\d+-\d+$/.test(line)) {
-      // 戰績數據 (如 26-29-1)，忽略不顯示
+      // 戰績資訊 (忽略)
     } else if (line.toLowerCase() === 'vs') {
-      // 忽略單獨的 vs
+      // 忽略 vs
     } else {
       otherLines.push(line);
     }
   }
 
-  // 狀態與局數判斷
+  // 1. 狀態與局數
   let statusStr = status || '未開始';
-  if (statusStr === '進行中' && inning) {
-    statusStr = `進行中 (${inning})`;
+  if (statusStr === '進行中') {
+    statusStr = inning ? `進行中 (${inning})` : '進行中';
   }
 
-  // 解析隊名與球場
+  // 2. 隊名與球場
   let awayTeam = '';
   let homeTeam = '';
   let venue = '';
@@ -75,7 +75,7 @@ function formatMatchInfo(matchObj) {
     awayTeam = otherLines[0];
   }
 
-  // 組合 Discord 格式
+  // 3. 組合標題與基本資訊
   let header = `⚾ **${gameId}**`;
   if (gameType) header += ` *(${gameType})*`;
 
@@ -86,6 +86,7 @@ function formatMatchInfo(matchObj) {
 
   let infoLine = `> ${infoParts.join(' ｜ ')}`;
 
+  // 4. 對戰隊伍 / 比分
   let matchupLine = '';
   if (score) {
     matchupLine = `> ⚔️ **${awayTeam || '客隊'}** \`${score}\` **${homeTeam || '主隊'}**`;
@@ -95,7 +96,15 @@ function formatMatchInfo(matchObj) {
     matchupLine = `> ⚔️ ${otherLines.join(' vs ')}`;
   }
 
-  return `${header}\n${infoLine}\n${matchupLine}`;
+  // 5. 當前投手 vs 打者對決狀態
+  let pbLine = '';
+  if (pitcher || batter) {
+    const pStr = pitcher ? `🎯 投手：**${pitcher}**` : '';
+    const bStr = batter ? `🏏 打者：**${batter}**` : '';
+    pbLine = `> ${[pStr, bStr].filter(Boolean).join('  vs  ')}`;
+  }
+
+  return [header, infoLine, matchupLine, pbLine].filter(Boolean).join('\n');
 }
 
 async function main() {
@@ -120,7 +129,7 @@ async function main() {
         const text = div.innerText.trim();
         const gameMatches = text.match(/GAME\d+/gi) || [];
         const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-        return gameMatches.length === 1 && lines.length >= 4 && lines.length <= 20;
+        return gameMatches.length === 1 && lines.length >= 3 && lines.length <= 25;
       });
 
       candidateDivs.sort((a, b) => a.innerText.length - b.innerText.length);
@@ -137,22 +146,38 @@ async function main() {
         if (seen.has(gameId)) continue;
         seen.add(gameId);
 
-        // 深度搜尋局數資訊 (例如 1局上, 3下, 5局下)
-        let inning = '';
-        const allSubTexts = Array.from(card.querySelectorAll('*')).map(el => el.innerText.trim());
-        const combinedText = [text, ...allSubTexts].join(' ');
+        // 收集卡片內所有子元素的文字內容
+        const allElements = Array.from(card.querySelectorAll('*'));
+        const allTexts = [text, ...allElements.map(e => e.innerText || e.textContent || '')].map(t => t.trim()).filter(Boolean);
+        const fullString = allTexts.join('\n');
 
-        const inningMatch = combinedText.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
+        // 1. 抓取局數 (例: 1上, 3局下, 5下)
+        let inning = '';
+        const inningMatch = fullString.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
         if (inningMatch) {
-          const num = inningMatch[1];
-          const side = inningMatch[2];
-          inning = `${num}局${side}`;
+          inning = `${inningMatch[1]}局${inningMatch[2]}`;
+        }
+
+        // 2. 抓取投手
+        let pitcher = '';
+        const pMatch = fullString.match(/(?:投\s*手?|P)\s*[:：]?\s*([\u4e00-\u9fa5a-zA-Z0-9·•]{2,8})/i);
+        if (pMatch) {
+          pitcher = pMatch[1].replace(/^(手|P)/i, '').trim();
+        }
+
+        // 3. 抓取打者
+        let batter = '';
+        const bMatch = fullString.match(/(?:打\s*者?|B)\s*[:：]?\s*([\u4e00-\u9fa5a-zA-Z0-9·•]{2,8})/i);
+        if (bMatch) {
+          batter = bMatch[1].replace(/^(者|B)/i, '').trim();
         }
 
         results.push({
           gameId,
           rawText: text,
-          inning
+          inning,
+          pitcher,
+          batter
         });
       }
 
