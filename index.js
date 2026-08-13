@@ -45,7 +45,7 @@ function formatMatchInfo(matchObj) {
     } else if (/^\d+\s*[:：]\s*\d+$/.test(line)) {
       score = line;
     } else if (/^\d+-\d+-\d+$/.test(line)) {
-      // 戰績資訊 (忽略)
+      // 忽略戰績
     } else if (line.toLowerCase() === 'vs') {
       // 忽略 vs
     } else {
@@ -122,6 +122,7 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
+    // 1. 抓取卡片資訊與詳細頁連結 (boxUrl)
     const matchesData = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
       
@@ -146,46 +147,68 @@ async function main() {
         if (seen.has(gameId)) continue;
         seen.add(gameId);
 
-        // 收集卡片內所有子元素的文字內容
-        const allElements = Array.from(card.querySelectorAll('*'));
-        const allTexts = [text, ...allElements.map(e => e.innerText || e.textContent || '')].map(t => t.trim()).filter(Boolean);
-        const fullString = allTexts.join('\n');
-
-        // 1. 抓取局數 (例: 1上, 3局下, 5下)
-        let inning = '';
-        const inningMatch = fullString.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
-        if (inningMatch) {
-          inning = `${inningMatch[1]}局${inningMatch[2]}`;
-        }
-
-        // 2. 抓取投手
-        let pitcher = '';
-        const pMatch = fullString.match(/(?:投\s*手?|P)\s*[:：]?\s*([\u4e00-\u9fa5a-zA-Z0-9·•]{2,8})/i);
-        if (pMatch) {
-          pitcher = pMatch[1].replace(/^(手|P)/i, '').trim();
-        }
-
-        // 3. 抓取打者
-        let batter = '';
-        const bMatch = fullString.match(/(?:打\s*者?|B)\s*[:：]?\s*([\u4e00-\u9fa5a-zA-Z0-9·•]{2,8})/i);
-        if (bMatch) {
-          batter = bMatch[1].replace(/^(者|B)/i, '').trim();
-        }
+        // 尋找此卡片內的比賽詳細頁連結
+        const anchor = card.querySelector('a') || card.closest('a');
+        const boxUrl = anchor ? anchor.href : '';
 
         results.push({
           gameId,
           rawText: text,
-          inning,
-          pitcher,
-          batter
+          boxUrl,
+          status: text.includes('進行中') ? '進行中' : '其他'
         });
       }
 
       return results;
     });
 
+    // 2. 對於「進行中」的比賽，開啟詳細頁抓取「局數」與「投手 vs 打者」
+    for (let match of matchesData) {
+      if (match.status === '進行中' && match.boxUrl) {
+        try {
+          const detailPage = await browser.newPage();
+          await detailPage.emulateTimezone('Asia/Taipei');
+          await detailPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+          await detailPage.goto(match.boxUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await new Promise(r => setTimeout(r, 3000));
+
+          const detailData = await detailPage.evaluate(() => {
+            const fullText = document.body.innerText;
+
+            // 抓局數 (例: 3局上, 5下)
+            let inning = '';
+            const inningMatch = fullText.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
+            if (inningMatch) {
+              inning = `${inningMatch[1]}局${inningMatch[2]}`;
+            }
+
+            // 抓投手
+            let pitcher = '';
+            const pMatch = fullText.match(/(?:投手|投\s*手|P)\s*[:：]?\s*([\u4e00-\u9fa5]{2,8})/);
+            if (pMatch) pitcher = pMatch[1];
+
+            // 抓打者
+            let batter = '';
+            const bMatch = fullText.match(/(?:打者|打\s*者|B)\s*[:：]?\s*([\u4e00-\u9fa5]{2,8})/);
+            if (bMatch) batter = bMatch[1];
+
+            return { inning, pitcher, batter };
+          });
+
+          match.inning = detailData.inning;
+          match.pitcher = detailData.pitcher;
+          match.batter = detailData.batter;
+
+          await detailPage.close();
+        } catch (e) {
+          console.error(`無法取得 ${match.gameId} 詳細資料:`, e.message);
+        }
+      }
+    }
+
     await browser.close();
 
+    // 3. 輸出結果
     const todayStr = getTaiwanDate();
     let output = `📢 **中華職棒 賽況回報 (${todayStr})**\n\n`;
     
