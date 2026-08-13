@@ -2,8 +2,11 @@ process.env.TZ = 'Asia/Taipei';
 
 const puppeteer = require('puppeteer');
 const axios = require('axios');
+const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 
 function getTaiwanDate() {
   const now = new Date();
@@ -13,6 +16,7 @@ function getTaiwanDate() {
   return `${yyyy}/${mm}/${dd}`;
 }
 
+// 發送 Discord 文字訊息 (via Webhook)
 async function sendToDiscord(content) {
   if (!DISCORD_WEBHOOK_URL) return;
   const chunks = content.match(/[\s\S]{1,1900}/g) || [content];
@@ -22,7 +26,7 @@ async function sendToDiscord(content) {
   }
 }
 
-// 格式化單場賽事資訊
+// 格式化單場賽事文字卡片
 function formatMatchInfo(matchObj) {
   const { gameId, rawText, inning, pitcher, batter } = matchObj;
   const rawLines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -75,6 +79,10 @@ function formatMatchInfo(matchObj) {
     awayTeam = otherLines[0];
   }
 
+  // 將解析好的隊名寫回物件，方便開頻道使用
+  matchObj.awayTeam = awayTeam;
+  matchObj.homeTeam = homeTeam;
+
   // 3. 組合標題與基本資訊
   let header = `⚾ **${gameId}**`;
   if (gameType) header += ` *(${gameType})*`;
@@ -96,7 +104,7 @@ function formatMatchInfo(matchObj) {
     matchupLine = `> ⚔️ ${otherLines.join(' vs ')}`;
   }
 
-  // 5. 當前投手 vs 打者對決狀態 (有抓到正確名字才顯示)
+  // 5. 當前投手 vs 打者
   let pbLine = '';
   if (pitcher || batter) {
     const pStr = pitcher ? `🎯 投手：**${pitcher}**` : '';
@@ -105,6 +113,62 @@ function formatMatchInfo(matchObj) {
   }
 
   return [header, infoLine, matchupLine, pbLine].filter(Boolean).join('\n');
+}
+
+// 自動維護 Discord 語音頻道
+async function manageVoiceChannels(matchesData) {
+  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
+    console.log("未設定 DISCORD_BOT_TOKEN 或 DISCORD_GUILD_ID，跳過語音頻道建立。");
+    return;
+  }
+
+  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+  try {
+    await client.login(DISCORD_BOT_TOKEN);
+    const guild = await client.guilds.fetch(DISCORD_GUILD_ID);
+
+    // 1. 尋找或建立「⚾ 今日賽事討論區」類別
+    let category = guild.channels.cache.find(
+      c => c.type === ChannelType.GuildCategory && c.name === '⚾ 今日賽事討論區'
+    );
+
+    if (!category) {
+      category = await guild.channels.create({
+        name: '⚾ 今日賽事討論區',
+        type: ChannelType.GuildCategory,
+      });
+    }
+
+    // 2. 清理該類別下舊的賽事語音頻道
+    const existingVoiceChannels = guild.channels.cache.filter(
+      c => c.parentId === category.id && c.type === ChannelType.GuildVoice
+    );
+
+    for (const [_, channel] of existingVoiceChannels) {
+      await channel.delete('清理舊賽事頻道');
+    }
+
+    // 3. 依照今日比賽建立語音頻道
+    for (const match of matchesData) {
+      const teams = (match.awayTeam && match.homeTeam) 
+        ? `${match.awayTeam}vs${match.homeTeam}` 
+        : '';
+      const channelName = `🔊 ${match.gameId} ${teams}`.trim();
+
+      await guild.channels.create({
+        name: channelName.slice(0, 100),
+        type: ChannelType.GuildVoice,
+        parent: category.id,
+      });
+    }
+
+    console.log(`已成功為今日 ${matchesData.length} 場賽事同步 Discord 語音頻道！`);
+  } catch (error) {
+    console.error("建立語音頻道時發生錯誤:", error);
+  } finally {
+    client.destroy();
+  }
 }
 
 async function main() {
@@ -122,7 +186,7 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    // 1. 抓取卡片資訊與詳細頁連結
+    // 1. 抓取卡片與詳細頁連結
     const matchesData = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
       
@@ -161,7 +225,7 @@ async function main() {
       return results;
     });
 
-    // 2. 對於「進行中」的比賽，點進詳細頁抓取真正的局數與投打
+    // 2. 「進行中」比賽進詳細頁抓取局數與投打
     for (let match of matchesData) {
       if (match.status === '進行中' && match.boxUrl) {
         try {
@@ -174,14 +238,12 @@ async function main() {
           const detailData = await detailPage.evaluate(() => {
             const fullText = document.body.innerText;
 
-            // 抓取局數
             let inning = '';
             const inningMatch = fullText.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
             if (inningMatch) {
               inning = `${inningMatch[1]}局${inningMatch[2]}`;
             }
 
-            // 表格標頭與比賽動態術語黑名單
             const invalidNames = [
               '局數', '打席', '打數', '安打', '得分', '打點', '三振', '四壞', '四死',
               '失分', '自責分', '投球數', '防禦率', '先發', '替補', '合計', '成績',
@@ -191,7 +253,6 @@ async function main() {
               '三壘', '本壘', '無死', '一死', '二死', '保送', '換投', '暫停', '進行中'
             ];
 
-            // 抓取投手
             let pitcher = '';
             const pMatches = Array.from(fullText.matchAll(/(?:投手|投\s*手|P)\s*[:：]?\s*([\u4e00-\u9fa5·•]{2,8})/g));
             for (const m of pMatches) {
@@ -202,7 +263,6 @@ async function main() {
               }
             }
 
-            // 抓取打者
             let batter = '';
             const bMatches = Array.from(fullText.matchAll(/(?:打者|打\s*者|B)\s*[:：]?\s*([\u4e00-\u9fa5·•]{2,8})/g));
             for (const m of bMatches) {
@@ -229,7 +289,7 @@ async function main() {
 
     await browser.close();
 
-    // 3. 輸出結果
+    // 3. 發送 Discord 文字推播
     const todayStr = getTaiwanDate();
     let output = `📢 **中華職棒 賽況回報 (${todayStr})**\n\n`;
     
@@ -243,6 +303,12 @@ async function main() {
     }
 
     await sendToDiscord(output);
+
+    // 4. 自動建立 / 更新 Discord 語音頻道
+    if (matchesData.length > 0) {
+      await manageVoiceChannels(matchesData);
+    }
+
   } catch (error) {
     console.error("執行發生錯誤:", error);
     process.exit(1);
