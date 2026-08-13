@@ -1,13 +1,17 @@
 {
-  "name": "cpbl-score-webhook",
+  "name": "cpbl-discord-bot",
   "version": "1.0.0",
-  "description": "CPBL Score Webhook Scraper powered by GitHub Actions",
+  "description": "自動爬取中華職棒賽況並同步至 Discord Webhook 與語音頻道狀態",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": ["cpbl", "discord", "puppeteer", "bot"],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
     "axios": "^1.6.8",
+    "discord.js": "^14.14.2",
     "puppeteer": "^22.6.0"
   }
 }
