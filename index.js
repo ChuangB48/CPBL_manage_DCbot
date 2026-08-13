@@ -1,4 +1,3 @@
-// 強制設定 Node.js 環境時區為台灣時間
 process.env.TZ = 'Asia/Taipei';
 
 const puppeteer = require('puppeteer');
@@ -32,35 +31,33 @@ async function main() {
   
   try {
     const page = await browser.newPage();
-    
-    // 💡 關鍵設定：強制瀏覽器模仿台灣時區
     await page.emulateTimezone('Asia/Taipei');
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
     
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    // 1. 抓取包含 GAME 與 vs 的區塊
+    // 1. 取消 vs 限制！改用正則表達式尋找包含 GAME+數字 的卡片
     const rawMatches = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
       return allDivs
         .map(div => div.innerText.trim())
-        .filter(text => text.includes('GAME') && text.includes('vs'));
+        .filter(text => /GAME\d+/i.test(text));
     });
 
     await browser.close();
 
-    // 2. 依照長度排序，優先取最小容器
+    // 2. 依照長度排序，優先取最精簡的子容器
     rawMatches.sort((a, b) => a.length - b.length);
 
     const uniqueMatches = [];
     const seenGames = new Set();
 
-    // 3. 去重
+    // 3. 去重（確保每個 GAME 編號只會出現一次）
     rawMatches.forEach(text => {
-      const matchIds = text.match(/GAME\d+/g) || [];
+      const matchIds = text.match(/GAME\d+/gi) || [];
       if (matchIds.length === 1) {
-        const gameId = matchIds[0];
+        const gameId = matchIds[0].toUpperCase();
         if (!seenGames.has(gameId)) {
           seenGames.add(gameId);
           uniqueMatches.push(text);
