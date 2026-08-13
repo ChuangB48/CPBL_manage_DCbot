@@ -1,13 +1,8 @@
 name: CPBL Match Scraper & Discord Bot
 
 on:
-  # 1. 自動定時執行 (Cron Schedule)
   schedule:
-    # 範例：台灣時間 16:00 ~ 22:00，每 30 分鐘自動跑一次
-    # (註：GitHub 時間為 UTC，台灣時間為 UTC+8，所以 8-14 代表台灣 16:00-22:00)
     - cron: '*/30 8-14 * * *'
-
-  # 2. 手動觸發 (讓你在 GitHub 介面隨時按鈕執行)
   workflow_dispatch:
 
 jobs:
@@ -15,22 +10,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 第一步：拉取專案程式碼
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 第二步：安裝 Node.js 環境
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '24'   # 升級至 Node 24，解決警告
 
-      # 第三步：安裝 npm 套件 (包含 puppeteer, axios, discord.js)
       - name: Install Dependencies
         run: npm install
 
-      # 第四步：執行主程式並傳入 3 個 Secrets 環境變數
       - name: Run CPBL Scraper & Discord Bot
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
