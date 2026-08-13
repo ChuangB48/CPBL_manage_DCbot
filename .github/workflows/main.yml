@@ -22,7 +22,7 @@ jobs:
           cache: 'npm'
 
       - name: 安裝專案依賴套件
-        run: npm ci
+        run: npm install
 
       - name: 執行 CPBL 爬蟲與 Discord 同步
         env:
