@@ -134,7 +134,7 @@ async function manageVoiceChannels(matchesData) {
     let category = null;
 
     // 1. 優先使用指定的類別 ID 尋找現成類別
-    if (DISCORD_CATEGORY_ID && DISCORD_CATEGORY_ID !== '把你的類別ID貼在這邊') {
+    if (DISCORD_CATEGORY_ID && DISCORD_CATEGORY_ID !== 1536369967274922037) {
       try {
         category = await guild.channels.fetch(DISCORD_CATEGORY_ID);
       } catch (e) {
@@ -171,7 +171,7 @@ async function manageVoiceChannels(matchesData) {
       const teams = (match.awayTeam && match.homeTeam) 
         ? `${match.awayTeam}vs${match.homeTeam}` 
         : '';
-      const channelName = `🔊 ${match.gameId} ${teams}`.trim();
+      const channelName = `🔊 ${teams} ${match.gameId}`.trim();
 
       await guild.channels.create({
         name: channelName.slice(0, 100),
