@@ -37,23 +37,29 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
     await new Promise(r => setTimeout(r, 6000));
 
-    // 1. 取消 vs 限制！改用正則表達式尋找包含 GAME+數字 的卡片
+    // 1. 抓取包含 GAME 且行數介於 4~15 行之間的「完整比賽卡片」
     const rawMatches = await page.evaluate(() => {
       const allDivs = Array.from(document.querySelectorAll('div'));
       return allDivs
         .map(div => div.innerText.trim())
-        .filter(text => /GAME\d+/i.test(text));
+        .filter(text => {
+          const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+          const gameCount = (text.match(/GAME\d+/gi) || []).length;
+          
+          // 條件：包含 GAME、只有 1 場比賽，且行數要在 4~15 行之間（過濾微型標籤與超大容器）
+          return gameCount === 1 && lines.length >= 4 && lines.length <= 15;
+        });
     });
 
     await browser.close();
 
-    // 2. 依照長度排序，優先取最精簡的子容器
+    // 2. 依照字數排序，優先取合適的卡片
     rawMatches.sort((a, b) => a.length - b.length);
 
     const uniqueMatches = [];
     const seenGames = new Set();
 
-    // 3. 去重（確保每個 GAME 編號只會出現一次）
+    // 3. 去重
     rawMatches.forEach(text => {
       const matchIds = text.match(/GAME\d+/gi) || [];
       if (matchIds.length === 1) {
