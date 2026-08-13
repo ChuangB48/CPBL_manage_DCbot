@@ -8,7 +8,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 
-// 可以在此直接填入你的 Discord 類別 ID，或是設定環境變數 DISCORD_CATEGORY_ID
+// 優先讀取 Secrets，若無則可在此替換為類別 ID 字串預設值
 const DISCORD_CATEGORY_ID = process.env.DISCORD_CATEGORY_ID || '把你的類別ID貼在這邊';
 
 function getTaiwanDate() {
@@ -133,31 +133,31 @@ async function manageVoiceChannels(matchesData) {
 
     let category = null;
 
-    // 1. 優先使用指定的類別 ID 尋找現成類別
-    if (DISCORD_CATEGORY_ID && DISCORD_CATEGORY_ID !== 1536369967274922037) {
+    // 嘗試抓取指定的類別 ID
+    if (DISCORD_CATEGORY_ID && DISCORD_CATEGORY_ID !== '把你的類別ID貼在這邊') {
       try {
         category = await guild.channels.fetch(DISCORD_CATEGORY_ID);
+        
+        // 驗證抓到的頻道類型是否真的為類別 (Category)
+        if (category && category.type !== ChannelType.GuildCategory) {
+          console.error(`❌ 設定的 ID (${DISCORD_CATEGORY_ID}) 不是類別 (Category)，而是一般頻道！請重新複製類別 ID。`);
+          category = null;
+        }
       } catch (e) {
-        console.error("找不到指定的類別 ID，請確認 ID 是否正確。");
+        console.error(`❌ 找不到類別 ID (${DISCORD_CATEGORY_ID})，錯誤訊息:`, e.message);
+        console.error("👉 請檢查：1. ID 是否正確 2. Bot 是否有該類別的「檢視頻道/管理頻道」權限。");
       }
     }
 
-    // 2. 若沒設定 ID，預設找「⚾ 今日賽事討論區」
+    // 若未設定有效 ID，停止建立語音頻道（避免開錯地方或擅自新建類別）
     if (!category) {
-      category = guild.channels.cache.find(
-        c => c.type === ChannelType.GuildCategory && c.name === '⚾ 今日賽事討論區'
-      );
+      console.error("⚠️ 未成功取得有效的目標類別，停止建立語音頻道。");
+      return;
     }
 
-    // 3. 都找不到才新建類別
-    if (!category) {
-      category = await guild.channels.create({
-        name: '⚾ 今日賽事討論區',
-        type: ChannelType.GuildCategory,
-      });
-    }
+    console.log(`📌 成功鎖定目標類別：[${category.name}]`);
 
-    // 4. 清理該類別下舊的賽事語音頻道
+    // 1. 清理該類別下舊的賽事語音頻道
     const existingVoiceChannels = guild.channels.cache.filter(
       c => c.parentId === category.id && c.type === ChannelType.GuildVoice
     );
@@ -166,12 +166,12 @@ async function manageVoiceChannels(matchesData) {
       await channel.delete('清理舊賽事頻道');
     }
 
-    // 5. 依照今日比賽建立語音頻道
+    // 2. 依照今日比賽建立語音頻道
     for (const match of matchesData) {
       const teams = (match.awayTeam && match.homeTeam) 
         ? `${match.awayTeam}vs${match.homeTeam}` 
         : '';
-      const channelName = `🔊 ${teams} ${match.gameId}`.trim();
+      const channelName = `🔊 ${match.gameId} ${teams}`.trim();
 
       await guild.channels.create({
         name: channelName.slice(0, 100),
@@ -180,7 +180,7 @@ async function manageVoiceChannels(matchesData) {
       });
     }
 
-    console.log(`已成功在指定類別（${category.name}）下建立今日 ${matchesData.length} 場語音頻道！`);
+    console.log(`已成功在「${category.name}」類別下建立今日 ${matchesData.length} 場語音頻道！`);
   } catch (error) {
     console.error("建立語音頻道時發生錯誤:", error);
   } finally {
@@ -261,7 +261,7 @@ async function main() {
               inning = `${inningMatch[1]}局${inningMatch[2]}`;
             }
 
-            // 黑名單，過濾表格欄位及賽況術語
+            // 黑名單過濾表格標題與術語
             const invalidNames = [
               '局數', '打席', '打數', '安打', '得分', '打點', '三振', '四壞', '四死',
               '失分', '自責分', '投球數', '防禦率', '先發', '替補', '合計', '成績',
