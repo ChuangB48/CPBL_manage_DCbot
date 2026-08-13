@@ -107,7 +107,7 @@ async function manageVoiceChannels(matchesData) {
     }
 
     for (const match of matchesData) {
-      const channelName = `🔊 ${match.gameId}`.trim();
+      const channelName = `${match.gameId}`.trim();
       const channel = await guild.channels.create({
         name: channelName.slice(0, 100),
         type: ChannelType.GuildVoice,
@@ -115,8 +115,8 @@ async function manageVoiceChannels(matchesData) {
       });
 
       const matchupStatus = (match.awayTeam && match.homeTeam)
-        ? `⚔️ ${match.awayTeam} vs ${match.homeTeam}`
-        : '⚔️ 對戰組合未定';
+        ? `${match.awayTeam} vs ${match.homeTeam}`
+        : '對戰組合未定';
 
       await client.rest.put(`/channels/${channel.id}/voice-status`, { body: { status: matchupStatus } }).catch(() => {});
     }
