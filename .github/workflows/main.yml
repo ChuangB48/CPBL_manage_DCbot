@@ -1,19 +1,23 @@
-name: CPBL Discord Bot Daily Update
+name: CPBL Discord Bot Schedule
 
 on:
   schedule:
-    # UTC 時間 18:00 等於台灣時間 (UTC+8) 凌晨 02:00
+    # 1. 每日凌晨 02:00 重置頻道 (台灣時間 UTC+8 02:00 = UTC 18:00)
     - cron: '0 18 * * *'
-  workflow_dispatch: # 提供 GitHub Actions 頁面手動點擊執行的按鈕
+    
+    # 2. 每天 14:00 ~ 22:45 每 15 分鐘推送即時戰況 (台灣時間 14:00~22:45 = UTC 06:00~14:45)
+    - cron: '*/15 6-14 * * *'
+
+  workflow_dispatch: # 保留 GitHub 頁面手動點擊執行的按鈕
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: 檢查程式碼 (Checkout)
+      - name: 檢查程式碼
         uses: actions/checkout@v4
 
-      - name: 設定 Node.js 環境
+      - name: 設定 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -21,7 +25,7 @@ jobs:
       - name: 安裝 NPM 套件
         run: npm install
 
-      - name: 執行 CPBL 爬蟲與 Discord 頻道重置
+      - name: 執行 CPBL Bot
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
