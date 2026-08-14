@@ -3,12 +3,11 @@ process.env.TZ = 'Asia/Taipei';
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
-const cron = require('node-cron');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
-const DISCORD_CATEGORY_ID = process.env.DISCORD_CATEGORY_ID || '把你的類別ID貼在這邊';
+const DISCORD_CATEGORY_ID = process.env.DISCORD_CATEGORY_ID;
 
 function getTaiwanDate() {
   const now = new Date();
@@ -130,7 +129,7 @@ async function manageVoiceChannels(matchesData) {
     const guild = await client.guilds.fetch(DISCORD_GUILD_ID);
 
     let category = null;
-    if (DISCORD_CATEGORY_ID && DISCORD_CATEGORY_ID !== '把你的類別ID貼在這邊') {
+    if (DISCORD_CATEGORY_ID) {
       try {
         category = await guild.channels.fetch(DISCORD_CATEGORY_ID);
         if (category && category.type !== ChannelType.GuildCategory) {
@@ -285,11 +284,8 @@ async function main() {
 
             const invalidNames = [
               '局數', '打席', '打數', '安打', '得分', '打點', '三振', '四壞', '四死',
-              '失分', '自責分', '投球數', '防禦率', '先發', '替補', '合計', '成績',
-              '紀錄', '投手', '打者', '守備', '代打', '代跑', '勝投', '敗投', '救援',
-              '出局', '好球', '壞球', '殘壘', '雙殺', '飛球', '滾地', '平飛', '接殺',
-              '觸身', '暴投', '捕逸', '盜壘', '刺殺', '封殺', '野選', '一壘', '二壘',
-              '三壘', '本壘', '無死', '一死', '二死', '保送', '換投', '暫停', '進行中'
+              '失分', '自責分', '投球數', '防禦率', '先發', '替補', '成績', '紀錄',
+              '投手', '打者', '守備', '代打', '代跑', '勝投', '敗投', '救援', '出局'
             ];
 
             let pitcher = '';
@@ -345,7 +341,7 @@ async function main() {
 
     await sendToDiscord(output);
 
-    // 4. 清理類別內所有舊語音頻道，並重新為今天比賽建全新的
+    // 4. 清理類別內所有舊語音頻道，並重新建立今日頻道
     await manageVoiceChannels(matchesData);
 
   } catch (error) {
@@ -353,17 +349,5 @@ async function main() {
   }
 }
 
-// ================= 排程設定 =================
-// 啟動時先執行一次
+// 執行主程式（跑完一次自動結束退出，適合 GitHub Actions 環境）
 main();
-
-// 設定每天凌晨 02:00 (台灣時間) 自動執行
-cron.schedule('0 2 * * *', () => {
-  console.log('⏰ 觸發每日凌晨 02:00 定時更新...');
-  main();
-}, {
-  scheduled: true,
-  timezone: "Asia/Taipei"
-});
-
-console.log('🚀 服務已啟動，排程設定為每日凌晨 02:00 自動清空並重新建立語音頻道。');

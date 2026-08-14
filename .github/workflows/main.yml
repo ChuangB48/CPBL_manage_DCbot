@@ -1,34 +1,30 @@
-name: CPBL Live Score Sync
+name: CPBL Discord Bot Daily Update
 
 on:
   schedule:
-    # 每 15 分鐘自動執行一次 (Cron 語法)
-    - cron: '*/15 * * * *'
-  # 支援在 GitHub 網頁介面上手動點擊觸發執行
-  workflow_dispatch:
+    # UTC 時間 18:00 等於台灣時間 (UTC+8) 凌晨 02:00
+    - cron: '0 18 * * *'
+  workflow_dispatch: # 提供 GitHub Actions 頁面手動點擊執行的按鈕
 
 jobs:
-  run-scraper:
+  run-bot:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 檢出專案程式碼
+      - name: 檢查程式碼 (Checkout)
         uses: actions/checkout@v4
 
-      - name: 設定 Node.js 20 環境
+      - name: 設定 Node.js 環境
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
-      - name: 安裝專案依賴套件
+      - name: 安裝 NPM 套件
         run: npm install
 
-      - name: 執行 CPBL 爬蟲與 Discord 同步
+      - name: 執行 CPBL 爬蟲與 Discord 頻道重置
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           DISCORD_CATEGORY_ID: ${{ secrets.DISCORD_CATEGORY_ID }}
-          TZ: 'Asia/Taipei'
         run: node index.js
