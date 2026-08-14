@@ -9,7 +9,7 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DISCORD_CATEGORY_ID = process.env.DISCORD_CATEGORY_ID;
 
-// 判斷當前執行模式 (可手動帶入 MODE=reset 或 MODE=update，沒帶則依時間自動判斷)
+// 判斷當前執行模式 (預設依台灣時間判斷：凌晨 1~5 點為重置模式，其餘時間為更新模式)
 const currentHour = parseInt(new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', hour12: false }), 10);
 const EXEC_MODE = process.env.MODE || (currentHour >= 1 && currentHour <= 5 ? 'reset' : 'update');
 
@@ -86,8 +86,6 @@ function formatMatchInfo(matchObj) {
 
   matchObj.awayTeam = awayTeam;
   matchObj.homeTeam = homeTeam;
-  matchObj.score = score;
-  matchObj.statusStr = statusStr;
 
   // 3. 組合標題與基本資訊
   let header = `⚾ **${gameId}**`;
@@ -121,7 +119,7 @@ function formatMatchInfo(matchObj) {
   return [header, infoLine, matchupLine, pbLine].filter(Boolean).join('\n');
 }
 
-// 語音頻道管理（支援重置模式與更新模式）
+// 語音頻道管理
 async function manageVoiceChannels(matchesData, isResetMode) {
   if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
     console.log("未設定 DISCORD_BOT_TOKEN 或 DISCORD_GUILD_ID，跳過語音頻道管理。");
@@ -152,7 +150,6 @@ async function manageVoiceChannels(matchesData, isResetMode) {
       return;
     }
 
-    // 取得該類別下現有的語音頻道
     const existingVoiceChannels = Array.from(
       guild.channels.cache.filter(
         c => c.parentId === category.id && c.type === ChannelType.GuildVoice
@@ -178,6 +175,7 @@ async function manageVoiceChannels(matchesData, isResetMode) {
           : `⚔️ ${match.gameId} 對戰組合未定`;
         
         channelName = channelName.slice(0, 100);
+        // 語音狀態只顯示場次
         const voiceStatus = `⚾ ${match.gameId}`;
 
         try {
@@ -196,33 +194,31 @@ async function manageVoiceChannels(matchesData, isResetMode) {
             console.error(`無法設定 ${match.gameId} 的語音狀態:`, err.message);
           }
 
-          console.log(`  + 已建立頻道：${channelName}`);
+          console.log(`  + 已建立頻道：${channelName} (${voiceStatus})`);
         } catch (err) {
           console.error(`建立 ${match.gameId} 頻道失敗:`, err.message);
         }
       }
     } else {
       // ---------------- 【賽事期間更新模式】 ----------------
-      console.log(`🔄 [Update 模式] 更新當前賽事頻道狀態（不刪除頻道）...`);
+      console.log(`🔄 [Update 模式] 確認並更新語音狀態（僅顯示場次，不顯示比分）...`);
       for (const match of matchesData) {
-        // 尋找對應的語音頻道
         const targetChannel = existingVoiceChannels.find(
           c => c.name.includes(match.gameId) || (match.awayTeam && c.name.includes(match.awayTeam))
         );
 
         if (targetChannel) {
-          let statusText = `⚾ ${match.gameId}`;
-          if (match.score) statusText += `｜${match.score}`;
-          if (match.statusStr) statusText += ` (${match.statusStr})`;
+          // 狀態保持簡潔，只顯示場次
+          const voiceStatus = `⚾ ${match.gameId}`;
 
           try {
             await client.rest.put(
               `/channels/${targetChannel.id}/voice-status`,
-              { body: { status: statusText.slice(0, 50) } }
+              { body: { status: voiceStatus } }
             );
-            console.log(`  ✓ 已更新 ${targetChannel.name} 狀態為: ${statusText}`);
+            console.log(`  ✓ 已設定 ${targetChannel.name} 語音狀態為: ${voiceStatus}`);
           } catch (err) {
-            console.error(`更新頻道 ${targetChannel.name} 狀態失敗:`, err.message);
+            console.error(`設定頻道 ${targetChannel.name} 狀態失敗:`, err.message);
           }
         }
       }
@@ -239,7 +235,7 @@ async function manageVoiceChannels(matchesData, isResetMode) {
 async function main() {
   const isResetMode = EXEC_MODE === 'reset';
   const modeName = isResetMode ? '凌晨每日重置' : '賽事即時戰況更新';
-  console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 模式：[${modeName}] - 開始執行爬蟲...`);
+  console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 模式：[${modeName}] - 開始執行...`);
 
   const targetUrl = 'https://stats.cpbl.com.tw/';
   const browser = await puppeteer.launch({ 

@@ -2,13 +2,16 @@ name: CPBL Discord Bot Schedule
 
 on:
   schedule:
-    # 1. 每日凌晨 02:00 重置頻道 (台灣時間 UTC+8 02:00 = UTC 18:00)
+    # 凌晨 02:00 重置頻道 (UTC 18:00)
     - cron: '0 18 * * *'
-    
-    # 2. 每天 14:00 ~ 22:45 每 15 分鐘推送即時戰況 (台灣時間 14:00~22:45 = UTC 06:00~14:45)
+    # 備用內建排程：14:00~22:45 每 15 分鐘 (UTC 6-14)
     - cron: '*/15 6-14 * * *'
 
-  workflow_dispatch: # 保留 GitHub 頁面手動點擊執行的按鈕
+  # 允許外部 Webhook 精準觸發 (用於解決 GitHub Cron 延遲問題)
+  repository_dispatch:
+    types: [trigger-bot]
+
+  workflow_dispatch: # 手動點擊按鈕觸發
 
 jobs:
   run-bot:
