@@ -3,6 +3,7 @@ process.env.TZ = 'Asia/Taipei';
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
+const cron = require('node-cron');
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -115,7 +116,7 @@ function formatMatchInfo(matchObj) {
   return [header, infoLine, matchupLine, pbLine].filter(Boolean).join('\n');
 }
 
-// 自動維護 Discord 語音頻道（名稱：對戰組合 / 狀態：場次編號）
+// 自動清理舊頻道並重新建立今日 Discord 語音頻道
 async function manageVoiceChannels(matchesData) {
   if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
     console.log("未設定 DISCORD_BOT_TOKEN 或 DISCORD_GUILD_ID，跳過語音頻道管理。");
@@ -146,80 +147,43 @@ async function manageVoiceChannels(matchesData) {
       return;
     }
 
-    console.log(`📌 成功鎖定目標類別：[${category.name}]`);
+    console.log(`📌 鎖定目標類別：[${category.name}]`);
 
-    // 取得該類別下現有的語音頻道
-    const existingVoiceChannels = guild.channels.cache.filter(
-      c => c.parentId === category.id && c.type === ChannelType.GuildVoice
+    // 1. 抓取該類別下「所有」舊有的語音頻道並先全部刪除
+    const existingVoiceChannels = Array.from(
+      guild.channels.cache.filter(
+        c => c.parentId === category.id && c.type === ChannelType.GuildVoice
+      ).values()
     );
 
-    // 建立現有頻道對照表 (透過抓取 Voice Status 或頻道名稱中的 GAME 編號)
-    const existingMap = new Map();
-    for (const [_, channel] of existingVoiceChannels) {
-      let matchId = null;
-
+    console.log(`🗑️ 開始清理類別下的舊頻道，共 ${existingVoiceChannels.length} 個...`);
+    for (const channel of existingVoiceChannels) {
       try {
-        // 1. 優先從 Voice Status 抓取 GAME 編號
-        const statusRes = await client.rest.get(`/channels/${channel.id}/voice-status`);
-        const foundInStatus = statusRes?.status?.match(/GAME\d+/i);
-        if (foundInStatus) {
-          matchId = foundInStatus[0].toUpperCase();
-        }
-      } catch (e) {
-        // 忽略 API 抓取失敗
-      }
-
-      // 2. 備用：若 Voice Status 沒抓到，嘗試從頻道名稱比對
-      if (!matchId) {
-        const foundInName = channel.name.match(/GAME\d+/i);
-        if (foundInName) {
-          matchId = foundInName[0].toUpperCase();
-        }
-      }
-
-      if (matchId) {
-        existingMap.set(matchId, channel);
+        await channel.delete('每日定時重置：刪除舊頻道');
+        console.log(`  - 已刪除舊頻道：${channel.name}`);
+      } catch (err) {
+        console.error(`  - 刪除頻道 ${channel.name} 失敗:`, err.message);
       }
     }
 
-    // 1. 逐一處理今日賽事
+    // 2. 為今日賽事建立全新語音頻道
+    console.log(`✨ 開始建立今日賽事頻道，共 ${matchesData.length} 場...`);
     for (const match of matchesData) {
-      // 頻道名稱：對戰組合
       let channelName = (match.awayTeam && match.homeTeam)
         ? `⚔️ ${match.awayTeam} vs ${match.homeTeam}`
         : `⚔️ ${match.gameId} 對戰組合未定`;
       
-      channelName = channelName.slice(0, 100); // Discord 頻道名稱 100 字限制
-
-      // 頻道狀態 (Voice Status)：場次編號
+      channelName = channelName.slice(0, 100);
       const voiceStatus = `⚾ ${match.gameId}`;
 
-      let channel = existingMap.get(match.gameId);
-
-      if (channel) {
-        // 若頻道名稱改變則更新
-        if (channel.name !== channelName) {
-          await channel.setName(channelName);
-        }
-        // 更新語音頻道狀態
-        try {
-          await client.rest.put(
-            `/channels/${channel.id}/voice-status`,
-            { body: { status: voiceStatus } }
-          );
-        } catch (err) {
-          console.error(`無法更新 ${match.gameId} 的語音頻道狀態:`, err.message);
-        }
-        existingMap.delete(match.gameId); // 標記為已處理
-      } else {
-        // 建立新頻道
-        channel = await guild.channels.create({
+      try {
+        const channel = await guild.channels.create({
           name: channelName,
           type: ChannelType.GuildVoice,
           parent: category.id,
         });
 
-        // 設定語音頻道狀態
+        // 設定語音頻道狀態 (Voice Status)
         try {
           await client.rest.put(
             `/channels/${channel.id}/voice-status`,
@@ -228,16 +192,14 @@ async function manageVoiceChannels(matchesData) {
         } catch (err) {
           console.error(`無法設定 ${match.gameId} 的語音頻道狀態:`, err.message);
         }
+
+        console.log(`  + 已建立頻道：${channelName} (${match.gameId})`);
+      } catch (err) {
+        console.error(`建立 ${match.gameId} 頻道失敗:`, err.message);
       }
     }
 
-    // 2. 清理過期或今天沒有比賽的舊頻道
-    for (const [gameId, channel] of existingMap.entries()) {
-      await channel.delete('清理過期賽事頻道');
-      console.log(`🗑️ 已刪除過期頻道：${channel.name}`);
-    }
-
-    console.log(`✅ 語音頻道同步完成！`);
+    console.log(`✅ 語音頻道重置與建立完成！`);
   } catch (error) {
     console.error("管理語音頻道時發生錯誤:", error);
   } finally {
@@ -246,6 +208,8 @@ async function manageVoiceChannels(matchesData) {
 }
 
 async function main() {
+  console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 開始執行賽事爬蟲與頻道更新...`);
+
   const targetUrl = 'https://stats.cpbl.com.tw/';
   const browser = await puppeteer.launch({ 
     headless: "new", 
@@ -381,15 +345,25 @@ async function main() {
 
     await sendToDiscord(output);
 
-    // 4. 自動同步 Discord 語音頻道
-    if (matchesData.length > 0) {
-      await manageVoiceChannels(matchesData);
-    }
+    // 4. 清理類別內所有舊語音頻道，並重新為今天比賽建全新的
+    await manageVoiceChannels(matchesData);
 
   } catch (error) {
     console.error("執行發生錯誤:", error);
-    process.exit(1);
   }
 }
 
+// ================= 排程設定 =================
+// 啟動時先執行一次
 main();
+
+// 設定每天凌晨 02:00 (台灣時間) 自動執行
+cron.schedule('0 2 * * *', () => {
+  console.log('⏰ 觸發每日凌晨 02:00 定時更新...');
+  main();
+}, {
+  scheduled: true,
+  timezone: "Asia/Taipei"
+});
+
+console.log('🚀 服務已啟動，排程設定為每日凌晨 02:00 自動清空並重新建立語音頻道。');
