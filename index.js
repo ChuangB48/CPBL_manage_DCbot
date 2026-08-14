@@ -115,7 +115,7 @@ function formatMatchInfo(matchObj) {
   return [header, infoLine, matchupLine, pbLine].filter(Boolean).join('\n');
 }
 
-// 自動維護 Discord 語音頻道 (智慧 Upsert 機制)
+// 自動維護 Discord 語音頻道（名稱：對戰組合 / 狀態：場次編號）
 async function manageVoiceChannels(matchesData) {
   if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
     console.log("未設定 DISCORD_BOT_TOKEN 或 DISCORD_GUILD_ID，跳過語音頻道管理。");
@@ -148,52 +148,82 @@ async function manageVoiceChannels(matchesData) {
 
     console.log(`📌 成功鎖定目標類別：[${category.name}]`);
 
-    // 取得該類別下現有的語音頻道 (Map: GAMEID -> channel)
+    // 取得該類別下現有的語音頻道
     const existingVoiceChannels = guild.channels.cache.filter(
       c => c.parentId === category.id && c.type === ChannelType.GuildVoice
     );
 
+    // 建立現有頻道對照表 (透過抓取 Voice Status 或頻道名稱中的 GAME 編號)
     const existingMap = new Map();
     for (const [_, channel] of existingVoiceChannels) {
-      const matchId = channel.name.match(/GAME\d+/i);
+      let matchId = null;
+
+      try {
+        // 1. 優先從 Voice Status 抓取 GAME 編號
+        const statusRes = await client.rest.get(`/channels/${channel.id}/voice-status`);
+        const foundInStatus = statusRes?.status?.match(/GAME\d+/i);
+        if (foundInStatus) {
+          matchId = foundInStatus[0].toUpperCase();
+        }
+      } catch (e) {
+        // 忽略 API 抓取失敗
+      }
+
+      // 2. 備用：若 Voice Status 沒抓到，嘗試從頻道名稱比對
+      if (!matchId) {
+        const foundInName = channel.name.match(/GAME\d+/i);
+        if (foundInName) {
+          matchId = foundInName[0].toUpperCase();
+        }
+      }
+
       if (matchId) {
-        existingMap.set(matchId[0].toUpperCase(), channel);
+        existingMap.set(matchId, channel);
       }
     }
 
-    // 1. 逐一處理今日賽事（存在就更新狀態，不存在才建立新頻道）
+    // 1. 逐一處理今日賽事
     for (const match of matchesData) {
-      const channelName = `🔊 ${match.gameId}`.trim();
-      const matchupStatus = (match.awayTeam && match.homeTeam)
+      // 頻道名稱：對戰組合
+      let channelName = (match.awayTeam && match.homeTeam)
         ? `⚔️ ${match.awayTeam} vs ${match.homeTeam}`
-        : '⚔️ 對戰組合未定';
+        : `⚔️ ${match.gameId} 對戰組合未定`;
+      
+      channelName = channelName.slice(0, 100); // Discord 頻道名稱 100 字限制
+
+      // 頻道狀態 (Voice Status)：場次編號
+      const voiceStatus = `⚾ ${match.gameId}`;
 
       let channel = existingMap.get(match.gameId);
 
       if (channel) {
+        // 若頻道名稱改變則更新
         if (channel.name !== channelName) {
-          await channel.setName(channelName.slice(0, 100));
+          await channel.setName(channelName);
         }
+        // 更新語音頻道狀態
         try {
           await client.rest.put(
             `/channels/${channel.id}/voice-status`,
-            { body: { status: matchupStatus } }
+            { body: { status: voiceStatus } }
           );
         } catch (err) {
           console.error(`無法更新 ${match.gameId} 的語音頻道狀態:`, err.message);
         }
         existingMap.delete(match.gameId); // 標記為已處理
       } else {
+        // 建立新頻道
         channel = await guild.channels.create({
-          name: channelName.slice(0, 100),
+          name: channelName,
           type: ChannelType.GuildVoice,
           parent: category.id,
         });
 
+        // 設定語音頻道狀態
         try {
           await client.rest.put(
             `/channels/${channel.id}/voice-status`,
-            { body: { status: matchupStatus } }
+            { body: { status: voiceStatus } }
           );
         } catch (err) {
           console.error(`無法設定 ${match.gameId} 的語音頻道狀態:`, err.message);
@@ -201,7 +231,7 @@ async function manageVoiceChannels(matchesData) {
       }
     }
 
-    // 2. 刪除過期或今日無賽事的舊頻道
+    // 2. 清理過期或今天沒有比賽的舊頻道
     for (const [gameId, channel] of existingMap.entries()) {
       await channel.delete('清理過期賽事頻道');
       console.log(`🗑️ 已刪除過期頻道：${channel.name}`);
