@@ -7,90 +7,79 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DISCORD_CATEGORY_ID = process.env.DISCORD_CATEGORY_ID;
 
-// 透過環境變數指定模式: 'reset' 或 'update'
-const EXEC_MODE = process.env.MODE || 'update';
-
-async function manageVoiceChannels(matchesData, isResetMode) {
-  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID) {
-    console.log("未設定 Token 或 Guild ID，跳過語音頻道管理。");
+async function createDailyVoiceChannels() {
+  if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID || !DISCORD_CATEGORY_ID) {
+    console.log("未設定 Token、Guild ID 或 Category ID，跳過語音頻道建立。");
     return;
   }
 
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
   try {
+    console.log("正在抓取今日 CPBL 賽事資料...");
+    const matchesData = await fetchCPBLData();
+
     await client.login(DISCORD_BOT_TOKEN);
     const guild = await client.guilds.fetch(DISCORD_GUILD_ID);
 
-    let category = null;
-    if (DISCORD_CATEGORY_ID) {
-      try {
-        category = await guild.channels.fetch(DISCORD_CATEGORY_ID);
-        if (category && category.type !== ChannelType.GuildCategory) category = null;
-      } catch (e) {
-        console.error(`找不到類別 ID (${DISCORD_CATEGORY_ID})`, e.message);
-      }
+    const category = await guild.channels.fetch(DISCORD_CATEGORY_ID).catch(() => null);
+    if (!category || category.type !== ChannelType.GuildCategory) {
+      console.error("❌ 找不到有效的類別 ID！");
+      return;
     }
 
-    if (!category) return;
-
-    const existingVoiceChannels = Array.from(
+    // 1. 刪除類別下的舊語音頻道
+    const existingChannels = Array.from(
       guild.channels.cache.filter(c => c.parentId === category.id && c.type === ChannelType.GuildVoice).values()
     );
 
-    if (isResetMode) {
-      console.log(`🗑️ [Reset 模式] 清理舊頻道 (${existingVoiceChannels.length} 個)...`);
-      for (const channel of existingVoiceChannels) {
-        try { await channel.delete('每日重置'); } catch (err) {}
-      }
-
-      console.log(`✨ [Reset 模式] 建立今日頻道 (${matchesData.length} 場)...`);
-      for (const match of matchesData) {
-        const rawLines = match.rawText.split('\n').map(l => l.trim()).filter(Boolean);
-        let away = rawLines[0] || '', home = rawLines[rawLines.length - 1] || '';
-        
-        let channelName = (away && home) ? `⚔️ ${away} vs ${home}` : `⚔️ ${match.gameId} 對戰組合未定`;
-        channelName = channelName.slice(0, 100);
-        const voiceStatus = `⚾ ${match.gameId}`;
-
-        try {
-          const channel = await guild.channels.create({
-            name: channelName,
-            type: ChannelType.GuildVoice,
-            parent: category.id,
-          });
-          await client.rest.put(`/channels/${channel.id}/voice-status`, { body: { status: voiceStatus } });
-        } catch (err) {
-          console.error(`建立 ${match.gameId} 頻道失敗:`, err.message);
-        }
-      }
-    } else {
-      console.log(`🔄 [Update 模式] 更新語音狀態...`);
-      for (const match of matchesData) {
-        const targetChannel = existingVoiceChannels.find(c => c.name.includes(match.gameId));
-        if (targetChannel) {
-          try {
-            await client.rest.put(`/channels/${targetChannel.id}/voice-status`, { body: { status: `⚾ ${match.gameId}` } });
-          } catch (err) {}
-        }
+    console.log(`🗑️ 開始清理舊頻道 (共 ${existingChannels.length} 個)...`);
+    for (const channel of existingChannels) {
+      try {
+        await channel.delete('每日定時重置');
+        console.log(`  - 已刪除舊頻道：${channel.name}`);
+      } catch (err) {
+        console.error(`  - 刪除頻道 ${channel.name} 失敗:`, err.message);
       }
     }
+
+    // 2. 為今日賽事建立全新語音頻道
+    console.log(`✨ 開始為今日 ${matchesData.length} 場賽事建立頻道...`);
+    for (const match of matchesData) {
+      const rawLines = match.rawText.split('\n').map(l => l.trim()).filter(Boolean);
+      let away = rawLines[0] || '';
+      let home = rawLines[rawLines.length - 1] || '';
+
+      let channelName = (away && home) ? `⚔️ ${away} vs ${home}` : `⚔️ ${match.gameId} 對戰組合未定`;
+      channelName = channelName.slice(0, 100);
+      const voiceStatus = `⚾ ${match.gameId}`;
+
+      try {
+        const channel = await guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildVoice,
+          parent: category.id,
+        });
+
+        // 設定語音頻道狀態文字（只設定一次）
+        try {
+          await client.rest.put(`/channels/${channel.id}/voice-status`, { body: { status: voiceStatus } });
+        } catch (e) {
+          // 若無權限或功能未開啟可忽略
+        }
+
+        console.log(`  + 已建立頻道：${channelName} (${voiceStatus})`);
+      } catch (err) {
+        console.error(`建立 ${match.gameId} 頻道失敗:`, err.message);
+      }
+    }
+
+    console.log("✅ 今日語音頻道重置與建立完成！");
+  } catch (error) {
+    console.error("執行語音頻道重置時發生錯誤:", error);
   } finally {
     client.destroy();
   }
 }
 
-async function main() {
-  const isResetMode = EXEC_MODE === 'reset';
-  console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 執行語音頻道管理 (${isResetMode ? '重置' : '更新'})...`);
-  
-  try {
-    const matchesData = await fetchCPBLData();
-    await manageVoiceChannels(matchesData, isResetMode);
-    console.log("✅ 語音頻道處理完成！");
-  } catch (error) {
-    console.error("語音頻道處理失敗:", error);
-  }
-}
-
-main();
+createDailyVoiceChannels();

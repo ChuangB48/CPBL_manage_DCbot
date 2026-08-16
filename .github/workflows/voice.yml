@@ -14,11 +14,9 @@ jobs:
         with:
           node-version: '20'
       - run: npm install
-      - name: 執行語音頻道管理
+      - name: 執行語音頻道重置與建立
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           DISCORD_CATEGORY_ID: ${{ secrets.DISCORD_CATEGORY_ID }}
-          # 讀取外部傳入的 payload.mode，若無則預設 update
-          MODE: ${{ github.event.client_payload.mode || 'update' }}
         run: node voice.js
