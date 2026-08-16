@@ -1,0 +1,24 @@
+name: CPBL Voice Channel Schedule
+
+on:
+  repository_dispatch:
+    types: [trigger-voice]
+  workflow_dispatch:
+
+jobs:
+  run-voice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: 執行語音頻道管理
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          DISCORD_CATEGORY_ID: ${{ secrets.DISCORD_CATEGORY_ID }}
+          # 讀取外部傳入的 payload.mode，若無則預設 update
+          MODE: ${{ github.event.client_payload.mode || 'update' }}
+        run: node voice.js

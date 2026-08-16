@@ -1,0 +1,20 @@
+name: CPBL Broadcast Schedule
+
+on:
+  repository_dispatch:
+    types: [trigger-broadcast]
+  workflow_dispatch:
+
+jobs:
+  run-broadcast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: 執行文字播報
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: node broadcast.js
