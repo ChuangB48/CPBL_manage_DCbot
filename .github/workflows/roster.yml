@@ -1,0 +1,21 @@
+name: CPBL Roster Movements Schedule
+
+on:
+  repository_dispatch:
+    types: [trigger-roster]
+  workflow_dispatch:
+
+jobs:
+  run-roster:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: 執行球員異動播報
+        env:
+          # 使用專屬的球員異動 Webhook
+          DISCORD_ROSTER_WEBHOOK_URL: ${{ secrets.DISCORD_ROSTER_WEBHOOK_URL }}
+        run: node roster.js

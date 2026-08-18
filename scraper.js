@@ -104,5 +104,46 @@ async function fetchCPBLData() {
     throw error;
   }
 }
+// 在 scraper.js 中新增這個函數
+async function fetchRosterMovements() {
+  const targetUrl = 'https://www.cpbl.com.tw/news'; // 中職官網新聞頁
+  const browser = await puppeteer.launch({ 
+    headless: "new", 
+    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+  });
 
-module.exports = { fetchCPBLData };
+  try {
+    const page = await browser.newPage();
+    await page.emulateTimezone('Asia/Taipei');
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+
+    const rosterNews = await page.evaluate(() => {
+      // 搜尋新聞清單中標題含有「異動」、「登錄」、「註銷」或「升降」的項目
+      const items = Array.from(document.querySelectorAll('.news_item, .news-list-item, a'));
+      const results = [];
+
+      for (const item of items) {
+        const text = item.innerText || '';
+        if (/異動|登錄|註銷|升降/i.test(text) && text.length > 5) {
+          const dateMatch = text.match(/\d{4}[\/.-]\d{2}[\/.-]\d{2}/) || [];
+          results.push({
+            title: text.split('\n')[0].trim(),
+            url: item.href || '',
+            date: dateMatch[0] || ''
+          });
+        }
+      }
+      return results;
+    });
+
+    await browser.close();
+    return rosterNews;
+  } catch (error) {
+    await browser.close();
+    throw error;
+  }
+}
+
+// 記得在 module.exports 補上
+module.exports = { fetchCPBLData, fetchRosterMovements };
