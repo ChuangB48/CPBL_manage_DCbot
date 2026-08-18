@@ -7,6 +7,28 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DISCORD_CATEGORY_ID = process.env.DISCORD_CATEGORY_ID;
 
+// 專門解析隊伍名稱的過濾函數
+function extractTeams(rawText) {
+  const rawLines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+
+  const filteredLines = rawLines.filter(line => {
+    if (/GAME\d+/i.test(line)) return false;
+    if (/例行賽|熱身賽|明星賽|季後賽|總冠軍賽/.test(line)) return false;
+    if (/未開始|進行中|已結束|延賽|因雨延賽|裁定|取消/.test(line)) return false; // 排除狀態
+    if (/^\d{1,2}:\d{2}$/.test(line)) return false; // 排除時間 (例如 18:35)
+    if (/^\d+\s*[:：]\s*\d+$/.test(line)) return false; // 排除比分
+    if (/^\d+-\d+-\d+$/.test(line)) return false; // 排除戰績
+    if (line.toLowerCase() === 'vs') return false;
+    if (line.includes('/')) return false; // 排除球場 (例如 / 新莊 /)
+    return true;
+  });
+
+  const away = filteredLines[0] || '';
+  const home = filteredLines.length >= 2 ? filteredLines[filteredLines.length - 1] : '';
+
+  return { away, home };
+}
+
 async function createDailyVoiceChannels() {
   if (!DISCORD_BOT_TOKEN || !DISCORD_GUILD_ID || !DISCORD_CATEGORY_ID) {
     console.log("未設定 Token、Guild ID 或 Category ID，跳過語音頻道建立。");
@@ -28,7 +50,7 @@ async function createDailyVoiceChannels() {
       return;
     }
 
-    // 1. 刪除類別下的舊語音頻道
+    // 1. 刪除舊語音頻道
     const existingChannels = Array.from(
       guild.channels.cache.filter(c => c.parentId === category.id && c.type === ChannelType.GuildVoice).values()
     );
@@ -46,11 +68,13 @@ async function createDailyVoiceChannels() {
     // 2. 為今日賽事建立全新語音頻道
     console.log(`✨ 開始為今日 ${matchesData.length} 場賽事建立頻道...`);
     for (const match of matchesData) {
-      const rawLines = match.rawText.split('\n').map(l => l.trim()).filter(Boolean);
-      let away = rawLines[0] || '';
-      let home = rawLines[rawLines.length - 1] || '';
+      // 使用改進後的 extractTeams 正確過濾客隊與主隊
+      const { away, home } = extractTeams(match.rawText);
 
-      let channelName = (away && home) ? `⚔️ ${away} vs ${home}` : `⚔️ ${match.gameId} 對戰組合未定`;
+      let channelName = (away && home) 
+        ? `⚔️ ${away} vs ${home}` 
+        : `⚔️ ${match.gameId} 對戰組合未定`;
+        
       channelName = channelName.slice(0, 100);
       const voiceStatus = `⚾ ${match.gameId}`;
 
@@ -61,11 +85,10 @@ async function createDailyVoiceChannels() {
           parent: category.id,
         });
 
-        // 設定語音頻道狀態文字（只設定一次）
         try {
           await client.rest.put(`/channels/${channel.id}/voice-status`, { body: { status: voiceStatus } });
         } catch (e) {
-          // 若無權限或功能未開啟可忽略
+          // 語音狀態權限不足時忽略
         }
 
         console.log(`  + 已建立頻道：${channelName} (${voiceStatus})`);
