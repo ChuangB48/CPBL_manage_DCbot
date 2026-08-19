@@ -1,137 +1,114 @@
 // scraper.js
 const puppeteer = require('puppeteer');
 
+/**
+ * 1. 抓取今日 CPBL 賽事資料（供語音頻道與賽事播報使用）
+ */
 async function fetchCPBLData() {
-  const targetUrl = 'https://stats.cpbl.com.tw/';
-  const browser = await puppeteer.launch({ 
-    headless: "new", 
-    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+  const targetUrl = 'https://www.cpbl.com.tw/';
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
-  
+
   try {
     const page = await browser.newPage();
     await page.emulateTimezone('Asia/Taipei');
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'
+    );
+
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 6000));
+    // 等待動態賽事卡片載入
+    await new Promise(r => setTimeout(r, 4000));
 
-    const matchesData = await page.evaluate(() => {
-      const allDivs = Array.from(document.querySelectorAll('div'));
-      const candidateDivs = allDivs.filter(div => {
-        const text = div.innerText.trim();
-        const gameMatches = text.match(/GAME\d+/gi) || [];
-        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-        return gameMatches.length === 1 && lines.length >= 3 && lines.length <= 25;
-      });
-
-      candidateDivs.sort((a, b) => a.innerText.length - b.innerText.length);
-      const seen = new Set();
-      const results = [];
-
-      for (const card of candidateDivs) {
-        const text = card.innerText.trim();
-        const gameIdMatch = text.match(/GAME\d+/gi);
-        if (!gameIdMatch) continue;
-        const gameId = gameIdMatch[0].toUpperCase();
-
-        if (seen.has(gameId)) continue;
-        seen.add(gameId);
-
-        const anchor = card.querySelector('a') || card.closest('a');
-        const boxUrl = anchor ? anchor.href : '';
-
-        results.push({
-          gameId,
-          rawText: text,
-          boxUrl,
-          status: text.includes('進行中') ? '進行中' : '其他'
+    const matches = await page.evaluate(() => {
+      // 搜尋 CPBL 首頁賽事區塊卡片
+      const cards = Array.from(document.querySelectorAll('.game_box, .game-item, .schedule_box'));
+      
+      if (cards.length > 0) {
+        return cards.map((card, index) => {
+          const text = card.innerText.trim();
+          const gameMatch = text.match(/GAME\s*\d+/i);
+          return {
+            gameId: gameMatch ? gameMatch[0].toUpperCase() : `GAME${index + 1}`,
+            rawText: text
+          };
         });
       }
-      return results;
-    });
 
-    // 抓取進行中賽事的投打詳細資料
-    for (let match of matchesData) {
-      if (match.status === '進行中' && match.boxUrl) {
-        let detailPage = null;
-        try {
-          detailPage = await browser.newPage();
-          await detailPage.emulateTimezone('Asia/Taipei');
-          await detailPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
-          await detailPage.goto(match.boxUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-          await new Promise(r => setTimeout(r, 3000));
+      // 備用機制：抓取所有含有 GAME 文字且長度合理的 DOM 區塊
+      const allElements = Array.from(document.querySelectorAll('div, section, li'));
+      const gameElements = allElements.filter(el => {
+        const txt = el.innerText || '';
+        return /GAME\s*\d+/i.test(txt) && txt.length > 10 && txt.length < 300;
+      });
 
-          const detailData = await detailPage.evaluate(() => {
-            const fullText = document.body.innerText;
-            let inning = '';
-            const inningMatch = fullText.match(/(\d{1,2}|[一二三四五六七八九十]+)\s*局?\s*([上下])/);
-            if (inningMatch) inning = `${inningMatch[1]}局${inningMatch[2]}`;
+      const uniqueResults = [];
+      const seenTexts = new Set();
 
-            const invalidNames = ['局數','打席','打數','安打','得分','打點','三振','四壞','四死','失分','自責分','投球數','防禦率','先發','替補','成績','紀錄','投手','打者','守備','代打','代跑','勝投','敗投','救援','出局'];
-
-            let pitcher = '';
-            const pMatches = Array.from(fullText.matchAll(/(?:投手|投\s*手|P)\s*[:：]?\s*([\u4e00-\u9fa5·•]{2,8})/g));
-            for (const m of pMatches) {
-              const candidate = m[1].trim();
-              if (!invalidNames.some(inv => candidate.includes(inv))) { pitcher = candidate; break; }
-            }
-
-            let batter = '';
-            const bMatches = Array.from(fullText.matchAll(/(?:打者|打\s*者|B)\s*[:：]?\s*([\u4e00-\u9fa5·•]{2,8})/g));
-            for (const m of bMatches) {
-              const candidate = m[1].trim();
-              if (!invalidNames.some(inv => candidate.includes(inv))) { batter = candidate; break; }
-            }
-
-            return { inning, pitcher, batter };
+      for (const el of gameElements) {
+        const text = el.innerText.trim().replace(/\s+/g, '\n');
+        if (!seenTexts.has(text)) {
+          seenTexts.add(text);
+          const gameMatch = text.match(/GAME\s*\d+/i);
+          uniqueResults.push({
+            gameId: gameMatch ? gameMatch[0].toUpperCase() : `GAME${uniqueResults.length + 1}`,
+            rawText: text
           });
-
-          match.inning = detailData.inning;
-          match.pitcher = detailData.pitcher;
-          match.batter = detailData.batter;
-        } catch (e) {
-          console.error(`無法取得 ${match.gameId} 詳細資料:`, e.message);
-        } finally {
-          if (detailPage) await detailPage.close();
         }
       }
-    }
+
+      return uniqueResults;
+    });
 
     await browser.close();
-    return matchesData;
+    return matches;
   } catch (error) {
     await browser.close();
     throw error;
   }
 }
-// 在 scraper.js 中新增這個函數
+
+/**
+ * 2. 抓取 CPBL 球員異動與新聞公告（供球員異動專屬頻道使用）
+ */
 async function fetchRosterMovements() {
-  const targetUrl = 'https://www.cpbl.com.tw/news'; // 中職官網新聞頁
-  const browser = await puppeteer.launch({ 
-    headless: "new", 
-    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+  const targetUrl = 'https://www.cpbl.com.tw/news';
+  const browser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 
   try {
     const page = await browser.newPage();
     await page.emulateTimezone('Asia/Taipei');
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'
+    );
+
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    // 強制等待 5 秒，確保動態新聞列表 AJAX 載入完成
+    await new Promise(r => setTimeout(r, 5000));
 
     const rosterNews = await page.evaluate(() => {
-      // 搜尋新聞清單中標題含有「異動」、「登錄」、「註銷」或「升降」的項目
-      const items = Array.from(document.querySelectorAll('.news_item, .news-list-item, a'));
+      const anchors = Array.from(document.querySelectorAll('a'));
       const results = [];
+      const seenUrls = new Set();
 
-      for (const item of items) {
-        const text = item.innerText || '';
-        if (/異動|登錄|註銷|升降/i.test(text) && text.length > 5) {
-          const dateMatch = text.match(/\d{4}[\/.-]\d{2}[\/.-]\d{2}/) || [];
-          results.push({
-            title: text.split('\n')[0].trim(),
-            url: item.href || '',
-            date: dateMatch[0] || ''
-          });
+      for (const a of anchors) {
+        const text = (a.innerText || '').trim().replace(/\s+/g, ' ');
+        const url = a.href || '';
+
+        // 涵蓋常見異動關鍵字：異動、登錄、註銷、升降、名單、球員
+        if (/異動|登錄|註銷|升降|名單|球員/i.test(text) && text.length >= 6) {
+          if (!seenUrls.has(url) && url.includes('/news/')) {
+            seenUrls.add(url);
+            results.push({
+              title: text,
+              url: url
+            });
+          }
         }
       }
       return results;
@@ -145,5 +122,7 @@ async function fetchRosterMovements() {
   }
 }
 
-// 記得在 module.exports 補上
-module.exports = { fetchCPBLData, fetchRosterMovements };
+module.exports = {
+  fetchCPBLData,
+  fetchRosterMovements
+};
