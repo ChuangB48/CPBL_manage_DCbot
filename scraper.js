@@ -73,9 +73,9 @@ async function fetchCPBLData() {
 /**
  * 2. 抓取 CPBL 球員異動與新聞公告（供球員異動專屬頻道使用）
  */
-// scraper.js 中的 fetchRosterMovements 部分
+// scraper.js (fetchRosterMovements 部分)
 async function fetchRosterMovements() {
-  const targetUrl = 'https://www.cpbl.com.tw/news';
+  const targetUrl = 'https://www.cpbl.com.tw/player/trans';
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -89,46 +89,41 @@ async function fetchRosterMovements() {
     );
 
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 5000));
+    await new Promise(r => setTimeout(r, 4000));
 
-    const rosterNews = await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll('a[href*="/news/"]'));
+    const records = await page.evaluate(() => {
+      const rows = Array.from(document.querySelectorAll('tr'));
       const results = [];
-      const seenUrls = new Set();
 
-      for (const a of anchors) {
-        const url = a.href || '';
-        // 排除非新聞內頁連結
-        if (!url.includes('/news/detail') && !url.match(/\/news\/\d+/)) continue;
-        if (seenUrls.has(url)) continue;
-
-        // 向上抓取父層容器，確保涵蓋 <span class="date">2026.08.19</span> 這類外部日期
-        let container = a.parentElement;
-        for (let i = 0; i < 3; i++) {
-          if (container && container.parentElement && container.parentElement.tagName !== 'BODY') {
-            container = container.parentElement;
+      for (const row of rows) {
+        const cells = Array.from(row.querySelectorAll('td')).map(c => c.innerText.trim());
+        if (cells.length > 0) {
+          const fullRow = cells.join(' | ');
+          if (fullRow.length > 0) {
+            results.push({
+              fullRow,
+              cells
+            });
           }
         }
+      }
 
-        const fullText = (container ? container.innerText : a.innerText || '')
-          .trim()
-          .replace(/\s+/g, ' ');
-        const titleText = (a.innerText || '').trim().replace(/\s+/g, ' ');
-
-        if (/異動|登錄|註銷|升降|名單|球員/i.test(fullText) && titleText.length >= 4) {
-          seenUrls.add(url);
-          results.push({
-            title: titleText,
-            fullText: fullText, // 包含同區塊內的日期與完整內文
-            url: url
-          });
+      // 備用機制：若非 HTML <table>，抓取含有日期格式的區塊
+      if (results.length === 0) {
+        const elements = Array.from(document.querySelectorAll('div, li, p'));
+        for (const el of elements) {
+          const txt = (el.innerText || '').trim().replace(/\s+/g, ' ');
+          if (/\d{4}[./-]\d{1,2}[./-]\d{1,2}/.test(txt) && txt.length < 200 && txt.length > 10) {
+            results.push({ fullRow: txt, cells: [txt] });
+          }
         }
       }
+
       return results;
     });
 
     await browser.close();
-    return rosterNews;
+    return records;
   } catch (error) {
     await browser.close();
     throw error;

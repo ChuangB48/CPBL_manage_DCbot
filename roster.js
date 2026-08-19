@@ -22,10 +22,8 @@ function getTaiwanDateFormats() {
   const mNoZero = String(parseInt(month, 10));
   const dNoZero = String(parseInt(day, 10));
 
-  // 中職官網常用格式（包含點號 2026.08.19）
   return [
     `${year}.${month}.${day}`,
-    `${year}.${mNoZero}.${dNoZero}`,
     `${year}/${month}/${day}`,
     `${year}-${month}-${day}`,
     `${month}.${day}`,
@@ -37,40 +35,37 @@ function getTaiwanDateFormats() {
 }
 
 async function main() {
-  console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 開始抓取球員異動...`);
+  console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 開始抓取 CPBL 球員異動頁面...`);
   
   try {
-    const newsList = await fetchRosterMovements();
-    console.log(`🔍 爬蟲成功抓到 ${newsList.length} 條相關新聞：`);
-    newsList.forEach((n, i) => {
-      console.log(`   ${i + 1}. 標題: "${n.title}" | 內文區塊: "${n.fullText}"`);
-    });
+    const rawRecords = await fetchRosterMovements();
+    console.log(`🔍 成功抓取到 ${rawRecords.length} 條原始紀錄。`);
 
     const todayFormats = getTaiwanDateFormats();
     console.log("📅 今日比對關鍵字：", todayFormats);
 
-    // 同時比對 title 與 fullText
-    const todayNews = newsList.filter(item => {
-      const searchTarget = `${item.title} ${item.fullText}`;
-      return todayFormats.some(fmt => searchTarget.includes(fmt));
+    // 比對今日紀錄
+    const todayRecords = rawRecords.filter(item => {
+      return todayFormats.some(fmt => item.fullRow.includes(fmt));
     });
 
     let output = '';
     const now = new Date();
     const todayStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
 
-    if (todayNews.length > 0) {
+    if (todayRecords.length > 0) {
       output = `📋 **【CPBL 中華職棒】今日球員異動通知 (${todayStr})**\n\n`;
-      todayNews.forEach((news) => {
-        output += `🔹 **${news.title}**\n🔗 [點此查看詳細公告](${news.url})\n\n`;
+      todayRecords.forEach(rec => {
+        output += `🔹 ${rec.fullRow}\n`;
       });
+      output += `\n🔗 [點此前往官網異動專區](https://www.cpbl.com.tw/player/trans)`;
     } else {
-      output = `ℹ️ **【CPBL 中華職棒】球員異動通知 (${todayStr})**\n> 今日尚無球員異動公告。`;
+      output = `ℹ️ **【CPBL 中華職棒】球員異動通知 (${todayStr})**\n> 今日尚無球員異動公告。\n🔗 [查看官網異動專區](https://www.cpbl.com.tw/player/trans)`;
     }
 
     if (DISCORD_ROSTER_WEBHOOK_URL) {
       await axios.post(DISCORD_ROSTER_WEBHOOK_URL, { content: output });
-      console.log("✅ 異動訊息已發送至頻道！");
+      console.log("✅ 異動訊息已成功發送至頻道！");
     } else {
       console.error("❌ 錯誤：未找到 DISCORD_ROSTER_WEBHOOK_URL 環境變數。");
     }
