@@ -89,41 +89,51 @@ async function fetchRosterMovements() {
     );
 
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    await new Promise(r => setTimeout(r, 4000));
 
-    const records = await page.evaluate(() => {
-      const rows = Array.from(document.querySelectorAll('tr'));
-      const results = [];
+    // 關鍵：強制等待表格或列表渲染完成
+    try {
+      await page.waitForSelector('table, .table, tr', { timeout: 10000 });
+    } catch (e) {
+      console.log('⚠️ 等待表格選擇器逾時，嘗試直接解析頁面...');
+    }
 
-      for (const row of rows) {
-        const cells = Array.from(row.querySelectorAll('td')).map(c => c.innerText.trim());
-        if (cells.length > 0) {
-          const fullRow = cells.join(' | ');
-          if (fullRow.length > 0) {
-            results.push({
-              fullRow,
-              cells
-            });
+    await new Promise(r => setTimeout(r, 3000));
+
+    const result = await page.evaluate(() => {
+      const parsedRecords = [];
+
+      // 1. 優先抓取 <table> 裡的每列數據 <tr>
+      const trs = Array.from(document.querySelectorAll('tr'));
+      for (const tr of trs) {
+        const tds = Array.from(tr.querySelectorAll('td, th')).map(td =>
+          (td.innerText || '').trim().replace(/\s+/g, ' ')
+        );
+        if (tds.length >= 2) {
+          parsedRecords.push(tds.join(' | '));
+        }
+      }
+
+      // 2. 備用方案：若沒抓到 table，按行拆分整頁文字，找含有日期的行
+      if (parsedRecords.length === 0) {
+        const lines = (document.body.innerText || '')
+          .split('\n')
+          .map(l => l.trim())
+          .filter(Boolean);
+        for (const line of lines) {
+          if (/\d{4}[./-]\d{1,2}[./-]\d{1,2}/.test(line)) {
+            parsedRecords.push(line);
           }
         }
       }
 
-      // 備用機制：若非 HTML <table>，抓取含有日期格式的區塊
-      if (results.length === 0) {
-        const elements = Array.from(document.querySelectorAll('div, li, p'));
-        for (const el of elements) {
-          const txt = (el.innerText || '').trim().replace(/\s+/g, ' ');
-          if (/\d{4}[./-]\d{1,2}[./-]\d{1,2}/.test(txt) && txt.length < 200 && txt.length > 10) {
-            results.push({ fullRow: txt, cells: [txt] });
-          }
-        }
-      }
-
-      return results;
+      return {
+        records: parsedRecords,
+        bodySnippet: (document.body.innerText || '').slice(0, 200).replace(/\s+/g, ' ')
+      };
     });
 
     await browser.close();
-    return records;
+    return result;
   } catch (error) {
     await browser.close();
     throw error;
