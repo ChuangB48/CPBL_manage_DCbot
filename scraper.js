@@ -73,6 +73,7 @@ async function fetchCPBLData() {
 /**
  * 2. 抓取 CPBL 球員異動與新聞公告（供球員異動專屬頻道使用）
  */
+// scraper.js 中的 fetchRosterMovements 部分
 async function fetchRosterMovements() {
   const targetUrl = 'https://www.cpbl.com.tw/news';
   const browser = await puppeteer.launch({
@@ -88,27 +89,39 @@ async function fetchRosterMovements() {
     );
 
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
-    // 強制等待 5 秒，確保動態新聞列表 AJAX 載入完成
     await new Promise(r => setTimeout(r, 5000));
 
     const rosterNews = await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll('a'));
+      const anchors = Array.from(document.querySelectorAll('a[href*="/news/"]'));
       const results = [];
       const seenUrls = new Set();
 
       for (const a of anchors) {
-        const text = (a.innerText || '').trim().replace(/\s+/g, ' ');
         const url = a.href || '';
+        // 排除非新聞內頁連結
+        if (!url.includes('/news/detail') && !url.match(/\/news\/\d+/)) continue;
+        if (seenUrls.has(url)) continue;
 
-        // 涵蓋常見異動關鍵字：異動、登錄、註銷、升降、名單、球員
-        if (/異動|登錄|註銷|升降|名單|球員/i.test(text) && text.length >= 6) {
-          if (!seenUrls.has(url) && url.includes('/news/')) {
-            seenUrls.add(url);
-            results.push({
-              title: text,
-              url: url
-            });
+        // 向上抓取父層容器，確保涵蓋 <span class="date">2026.08.19</span> 這類外部日期
+        let container = a.parentElement;
+        for (let i = 0; i < 3; i++) {
+          if (container && container.parentElement && container.parentElement.tagName !== 'BODY') {
+            container = container.parentElement;
           }
+        }
+
+        const fullText = (container ? container.innerText : a.innerText || '')
+          .trim()
+          .replace(/\s+/g, ' ');
+        const titleText = (a.innerText || '').trim().replace(/\s+/g, ' ');
+
+        if (/異動|登錄|註銷|升降|名單|球員/i.test(fullText) && titleText.length >= 4) {
+          seenUrls.add(url);
+          results.push({
+            title: titleText,
+            fullText: fullText, // 包含同區塊內的日期與完整內文
+            url: url
+          });
         }
       }
       return results;

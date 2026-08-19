@@ -5,7 +5,6 @@ const { fetchRosterMovements } = require('./scraper');
 
 const DISCORD_ROSTER_WEBHOOK_URL = process.env.DISCORD_ROSTER_WEBHOOK_URL;
 
-// 強制取得台灣時間的日期關鍵字清單
 function getTaiwanDateFormats() {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat('zh-TW', {
@@ -23,11 +22,14 @@ function getTaiwanDateFormats() {
   const mNoZero = String(parseInt(month, 10));
   const dNoZero = String(parseInt(day, 10));
 
-  // 回傳所有可能出現的日期寫法
+  // 中職官網常用格式（包含點號 2026.08.19）
   return [
+    `${year}.${month}.${day}`,
+    `${year}.${mNoZero}.${dNoZero}`,
     `${year}/${month}/${day}`,
     `${year}-${month}-${day}`,
-    `${year}.${month}.${day}`,
+    `${month}.${day}`,
+    `${mNoZero}.${dNoZero}`,
     `${month}/${day}`,
     `${mNoZero}/${dNoZero}`,
     `${mNoZero}月${dNoZero}日`
@@ -40,18 +42,22 @@ async function main() {
   try {
     const newsList = await fetchRosterMovements();
     console.log(`🔍 爬蟲成功抓到 ${newsList.length} 條相關新聞：`);
-    newsList.forEach((n, i) => console.log(`   ${i + 1}. [${n.title}](${n.url})`));
+    newsList.forEach((n, i) => {
+      console.log(`   ${i + 1}. 標題: "${n.title}" | 內文區塊: "${n.fullText}"`);
+    });
 
     const todayFormats = getTaiwanDateFormats();
-    console.log("📅 今日台灣日期比對關鍵字：", todayFormats);
+    console.log("📅 今日比對關鍵字：", todayFormats);
 
-    // 比對今日新聞
+    // 同時比對 title 與 fullText
     const todayNews = newsList.filter(item => {
-      return todayFormats.some(fmt => item.title.includes(fmt));
+      const searchTarget = `${item.title} ${item.fullText}`;
+      return todayFormats.some(fmt => searchTarget.includes(fmt));
     });
 
     let output = '';
-    const todayStr = todayFormats[0]; // 格式如 2026/08/19
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
 
     if (todayNews.length > 0) {
       output = `📋 **【CPBL 中華職棒】今日球員異動通知 (${todayStr})**\n\n`;
@@ -64,7 +70,7 @@ async function main() {
 
     if (DISCORD_ROSTER_WEBHOOK_URL) {
       await axios.post(DISCORD_ROSTER_WEBHOOK_URL, { content: output });
-      console.log("✅ 異動訊息已成功發送至專屬頻道！");
+      console.log("✅ 異動訊息已發送至頻道！");
     } else {
       console.error("❌ 錯誤：未找到 DISCORD_ROSTER_WEBHOOK_URL 環境變數。");
     }
