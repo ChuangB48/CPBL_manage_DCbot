@@ -105,8 +105,9 @@ async function fetchCPBLData() {
   }
 }
 // 在 scraper.js 中新增這個函數
+// scraper.js 中的 fetchRosterMovements 替換為以下內容
 async function fetchRosterMovements() {
-  const targetUrl = 'https://www.cpbl.com.tw/news'; // 中職官網新聞頁
+  const targetUrl = 'https://www.cpbl.com.tw/player/trans';
   const browser = await puppeteer.launch({ 
     headless: "new", 
     args: ['--no-sandbox', '--disable-setuid-sandbox'] 
@@ -117,28 +118,46 @@ async function fetchRosterMovements() {
     await page.emulateTimezone('Asia/Taipei');
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36');
     await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    // 等待 4 秒讓動態表格徹底載入
+    await new Promise(r => setTimeout(r, 4000));
 
-    const rosterNews = await page.evaluate(() => {
-      // 搜尋新聞清單中標題含有「異動」、「登錄」、「註銷」或「升降」的項目
-      const items = Array.from(document.querySelectorAll('.news_item, .news-list-item, a'));
+    const records = await page.evaluate(() => {
       const results = [];
 
-      for (const item of items) {
-        const text = item.innerText || '';
-        if (/異動|登錄|註銷|升降/i.test(text) && text.length > 5) {
-          const dateMatch = text.match(/\d{4}[\/.-]\d{2}[\/.-]\d{2}/) || [];
-          results.push({
-            title: text.split('\n')[0].trim(),
-            url: item.href || '',
-            date: dateMatch[0] || ''
-          });
+      // 1. 抓取表格中所有行 (tr)
+      const rows = Array.from(document.querySelectorAll('tr'));
+      for (const row of rows) {
+        const cells = Array.from(row.querySelectorAll('td, th'))
+          .map(c => c.innerText.trim())
+          .filter(Boolean);
+
+        if (cells.length >= 2) {
+          const fullRow = cells.join(' | ');
+          if (/\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2}/.test(fullRow)) {
+            results.push({ text: fullRow });
+          }
         }
       }
+
+      // 2. 備用機制：若不是標準 <table> 標籤，改為按行讀取包含日期的文字區塊
+      if (results.length === 0) {
+        const lines = (document.body.innerText || '')
+          .split('\n')
+          .map(l => l.trim())
+          .filter(Boolean);
+
+        for (const line of lines) {
+          if (/\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2}/.test(line) && line.length < 200 && line.length > 8) {
+            results.push({ text: line });
+          }
+        }
+      }
+
       return results;
     });
 
     await browser.close();
-    return rosterNews;
+    return records;
   } catch (error) {
     await browser.close();
     throw error;

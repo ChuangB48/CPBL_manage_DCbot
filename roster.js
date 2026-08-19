@@ -13,23 +13,22 @@ function getTaiwanDateFormats() {
     month: '2-digit',
     day: '2-digit'
   });
-
+  
   const parts = formatter.formatToParts(now);
   const year = parts.find(p => p.type === 'year').value;
   const month = parts.find(p => p.type === 'month').value;
   const day = parts.find(p => p.type === 'day').value;
-
+  
   const mNoZero = String(parseInt(month, 10));
   const dNoZero = String(parseInt(day, 10));
 
+  // 涵蓋各種可能的日期格式
   return [
-    `${year}.${month}.${day}`,
-    `${year}.${mNoZero}.${dNoZero}`,
     `${year}/${month}/${day}`,
     `${year}/${mNoZero}/${dNoZero}`,
+    `${year}.${month}.${day}`,
+    `${year}.${mNoZero}.${dNoZero}`,
     `${year}-${month}-${day}`,
-    `${month}.${day}`,
-    `${mNoZero}.${dNoZero}`,
     `${month}/${day}`,
     `${mNoZero}/${dNoZero}`,
     `${mNoZero}月${dNoZero}日`
@@ -38,20 +37,14 @@ function getTaiwanDateFormats() {
 
 async function main() {
   console.log(`[${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}] 開始抓取 CPBL 球員異動...`);
-
+  
   try {
-    const { records, bodySnippet } = await fetchRosterMovements();
-
-    console.log(`🔍 頁面前 200 字預覽: "${bodySnippet}"`);
-    console.log(`🔍 解析到的異動紀錄數量: ${records.length} 條`);
-    records.slice(0, 10).forEach((r, i) => console.log(`   ${i + 1}. ${r}`));
-
+    const records = await fetchRosterMovements();
     const todayFormats = getTaiwanDateFormats();
-    console.log('📅 今日比對關鍵字：', todayFormats);
 
-    // 比對今日異動紀錄
-    const todayRecords = records.filter(rec => {
-      return todayFormats.some(fmt => rec.includes(fmt));
+    // 篩選出包含今天日期的異動紀錄
+    const todayRecords = records.filter(item => {
+      return todayFormats.some(fmt => item.text.includes(fmt));
     });
 
     let output = '';
@@ -61,7 +54,7 @@ async function main() {
     if (todayRecords.length > 0) {
       output = `📋 **【CPBL 中華職棒】今日球員異動通知 (${todayStr})**\n\n`;
       todayRecords.forEach(rec => {
-        output += `🔹 ${rec}\n`;
+        output += `🔹 ${rec.text}\n`;
       });
       output += `\n🔗 [點此前往官網異動專區](https://www.cpbl.com.tw/player/trans)`;
     } else {
@@ -70,12 +63,12 @@ async function main() {
 
     if (DISCORD_ROSTER_WEBHOOK_URL) {
       await axios.post(DISCORD_ROSTER_WEBHOOK_URL, { content: output });
-      console.log('✅ 異動訊息已發送至專屬頻道！');
+      console.log("✅ 異動通知已成功發送！");
     } else {
-      console.error('❌ 錯誤：未找到 DISCORD_ROSTER_WEBHOOK_URL 環境變數。');
+      console.error("❌ 未找到 DISCORD_ROSTER_WEBHOOK_URL 環境變數。");
     }
   } catch (error) {
-    console.error('❌ 抓取球員異動失敗:', error);
+    console.error("❌ 抓取球員異動失敗:", error);
   }
 }
 
